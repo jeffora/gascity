@@ -320,6 +320,23 @@ func checkBatchNoMoleculeChildren(q BeadChildQuerier, open []beads.Bead, store b
 	return errors.Join(joined...)
 }
 
+// hasLiveConvoyParent reports whether the bead is parented under an
+// open convoy bead. A missing parent, unreadable parent, non-convoy
+// parent, or closed convoy all return false. Defensively treats a
+// nil querier as "no convoy" so CheckBeadState callers without a
+// querier fall through to the non-idempotent path and let finalize
+// create the convoy on the normal path.
+func hasLiveConvoyParent(q BeadQuerier, b beads.Bead) bool {
+	if q == nil || strings.TrimSpace(b.ParentID) == "" {
+		return false
+	}
+	parent, err := q.Get(b.ParentID)
+	if err != nil {
+		return false
+	}
+	return parent.Type == "convoy" && parent.Status != "closed"
+}
+
 // CheckBeadState checks whether a bead is already routed and returns a
 // structured result. Best-effort: nil querier or query failure → empty result.
 func CheckBeadState(q BeadQuerier, beadID string, a config.Agent, _ SlingDeps) BeadCheckResult {
@@ -350,6 +367,11 @@ func CheckBeadState(q BeadQuerier, beadID string, a config.Agent, _ SlingDeps) B
 	target := a.QualifiedName()
 	if strings.TrimSpace(b.Metadata["gc.routed_to"]) == target {
 		if b.Assignee == "" || b.Assignee == target {
+			if !hasLiveConvoyParent(q, b) {
+				// Prior sling set gc.routed_to but left no convoy — let
+				// finalize re-run to create it and poke the controller.
+				return BeadCheckResult{}
+			}
 			return BeadCheckResult{Idempotent: true}
 		}
 		return BeadCheckResult{
@@ -360,6 +382,9 @@ func CheckBeadState(q BeadQuerier, beadID string, a config.Agent, _ SlingDeps) B
 	isMulti := agentutil.IsMultiSessionAgent(&a)
 	if !isMulti {
 		if b.Assignee == target {
+			if !hasLiveConvoyParent(q, b) {
+				return BeadCheckResult{}
+			}
 			return BeadCheckResult{Idempotent: true}
 		}
 		var warnings []string
@@ -381,6 +406,9 @@ func CheckBeadState(q BeadQuerier, beadID string, a config.Agent, _ SlingDeps) B
 		poolLabel := "pool:" + target
 		for _, l := range b.Labels {
 			if l == poolLabel {
+				if !hasLiveConvoyParent(q, b) {
+					return BeadCheckResult{}
+				}
 				return BeadCheckResult{Idempotent: true}
 			}
 		}
