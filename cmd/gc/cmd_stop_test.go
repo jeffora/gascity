@@ -80,7 +80,7 @@ func TestCmdStopWaitsForStandaloneControllerExit(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	stopDone := make(chan int, 1)
 	go func() {
-		stopDone <- cmdStop([]string{dir}, &stdout, &stderr)
+		stopDone <- cmdStop([]string{dir}, &stdout, &stderr, 0, false)
 	}()
 
 	stopped := sp.waitForStops(t, 1)
@@ -226,7 +226,7 @@ func TestCmdStopUsesTargetCitySessionProviderOutsideCityDir(t *testing.T) {
 	}
 
 	var stdout, stderr bytes.Buffer
-	code := cmdStop([]string{cityDir}, &stdout, &stderr)
+	code := cmdStop([]string{cityDir}, &stdout, &stderr, 0, false)
 	if code != 0 {
 		t.Fatalf("cmdStop() = %d, want 0; stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
@@ -304,7 +304,7 @@ func TestCmdStopMarginExhaustion(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	stopDone := make(chan int, 1)
 	go func() {
-		stopDone <- cmdStop([]string{dir}, &stdout, &stderr)
+		stopDone <- cmdStop([]string{dir}, &stdout, &stderr, 0, false)
 	}()
 
 	stopped := sp.waitForStops(t, 1)
