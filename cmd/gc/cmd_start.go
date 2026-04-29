@@ -510,7 +510,7 @@ func doStartWithNameOverrideJSON(args []string, controllerMode bool, stdout, std
 		return 1
 	}
 	if missing := checkHardDependencies(cityPath); len(missing) > 0 {
-		fmt.Fprintf(stderr, "gc start: missing required dependencies:\n\n") //nolint:errcheck // best-effort stderr
+		fmt.Fprintf(stderr, "%s: missing required dependencies:\n\n", cmdName("start")) //nolint:errcheck // best-effort stderr
 		for _, dep := range missing {
 			fmt.Fprintf(stderr, "  - %s", dep.name) //nolint:errcheck // best-effort stderr
 			if dep.installHint != "" {

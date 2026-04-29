@@ -869,7 +869,7 @@ func doAgentSuspendOrResume(fs fsys.FS, cityPath, name string, suspended bool, s
 	// Phase 1: load raw config (no expansion) for safe write-back.
 	cfg, err := loadCityConfigForEditFS(fs, tomlPath)
 	if err != nil {
-		fmt.Fprintf(stderr, "gc agent %s: %v\n", verb, err) //nolint:errcheck // best-effort stderr
+		fmt.Fprintf(stderr, "%s: %v\n", cmdName("agent "+verb), err) //nolint:errcheck // best-effort stderr
 		return 1
 	}
 
@@ -883,14 +883,14 @@ func doAgentSuspendOrResume(fs fsys.FS, cityPath, name string, suspended bool, s
 			}
 		}
 		if err := writeCityConfigForEditFS(fs, tomlPath, cfg); err != nil {
-			fmt.Fprintf(stderr, "gc agent %s: %v\n", verb, err) //nolint:errcheck // best-effort stderr
+			fmt.Fprintf(stderr, "%s: %v\n", cmdName("agent "+verb), err) //nolint:errcheck // best-effort stderr
 			return 1
 		}
 		fmt.Fprintf(stdout, "%s agent '%s'\n", past, name) //nolint:errcheck // best-effort stdout
 		return 0
 	}
 	if updated, err := updateRootPackAgentSuspended(fs, cityPath, cfg, name, suspended); err != nil {
-		fmt.Fprintf(stderr, "gc agent %s: %v\n", verb, err) //nolint:errcheck // best-effort stderr
+		fmt.Fprintf(stderr, "%s: %v\n", cmdName("agent "+verb), err) //nolint:errcheck // best-effort stderr
 		return 1
 	} else if updated {
 		fmt.Fprintf(stdout, "%s agent '%s'\n", past, name) //nolint:errcheck // best-effort stdout
@@ -915,7 +915,7 @@ func doAgentSuspendOrResume(fs fsys.FS, cityPath, name string, suspended bool, s
 	}
 	if localDiscovered {
 		if err := configedit.WriteLocalDiscoveredAgentSuspended(fs, cityPath, resolved, suspended); err != nil {
-			fmt.Fprintf(stderr, "gc agent %s: %v\n", verb, err) //nolint:errcheck // best-effort stderr
+			fmt.Fprintf(stderr, "%s: %v\n", cmdName("agent "+verb), err) //nolint:errcheck // best-effort stderr
 			return 1
 		}
 		// Also strip any pre-existing [[patches.agent]] suspended override
@@ -925,13 +925,13 @@ func doAgentSuspendOrResume(fs fsys.FS, cityPath, name string, suspended bool, s
 		// patch.
 		if configedit.StripAgentPatchSuspended(cfg, resolved.QualifiedName()) {
 			if err := writeCityConfigForEditFS(fs, tomlPath, cfg); err != nil {
-				fmt.Fprintf(stderr, "gc agent %s: %v\n", verb, err) //nolint:errcheck // best-effort stderr
+				fmt.Fprintf(stderr, "%s: %v\n", cmdName("agent "+verb), err) //nolint:errcheck // best-effort stderr
 				return 1
 			}
 		}
 		fmt.Fprintf(stdout, "%s agent '%s'\n", past, name) //nolint:errcheck // best-effort stdout
 		return 0
 	}
-	fmt.Fprintf(stderr, "gc agent %s: agent %q is defined by a pack — use [[patches]] to override\n", verb, name) //nolint:errcheck // best-effort stderr
+	fmt.Fprintf(stderr, "%s: agent %q is defined by a pack — use [[patches]] to override\n", cmdName("agent "+verb), name) //nolint:errcheck // best-effort stderr
 	return 1
 }

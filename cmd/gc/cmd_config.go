@@ -536,7 +536,7 @@ func doConfigExplain(rigFilter, agentFilter string, stdout, stderr io.Writer) in
 		if rigFilter != "" || agentFilter != "" {
 			fmt.Fprintf(stderr, "gc config explain: no agents match filters (rig=%q agent=%q)\n", rigFilter, agentFilter) //nolint:errcheck // best-effort stderr
 		} else {
-			fmt.Fprintf(stderr, "gc config explain: no agents configured\n") //nolint:errcheck // best-effort stderr
+			fmt.Fprintf(stderr, "%s: no agents configured\n", cmdName("config explain")) //nolint:errcheck // best-effort stderr
 		}
 		return 1
 	}

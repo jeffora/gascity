@@ -579,7 +579,7 @@ func newConvergeRetryCmd(stdout, stderr io.Writer) *cobra.Command {
 func convergeSocketCmd(beadID, command string, params map[string]string, jsonOutput bool, stdout, stderr io.Writer) error {
 	rctx, err := resolveContext()
 	if err != nil {
-		fmt.Fprintf(stderr, "gc converge %s: %v\n", command, err) //nolint:errcheck
+		fmt.Fprintf(stderr, "%s: %v\n", cmdName("converge "+command), err) //nolint:errcheck
 		return errExit
 	}
 	if params == nil {
@@ -595,11 +595,11 @@ func convergeSocketCmd(beadID, command string, params map[string]string, jsonOut
 	}
 	reply, err := sendConvergenceRequest(rctx.CityPath, req)
 	if err != nil {
-		fmt.Fprintf(stderr, "gc converge %s: %v\n", command, err) //nolint:errcheck
+		fmt.Fprintf(stderr, "%s: %v\n", cmdName("converge "+command), err) //nolint:errcheck
 		return errExit
 	}
 	if reply.Error != "" {
-		fmt.Fprintf(stderr, "gc converge %s: %s\n", command, reply.Error) //nolint:errcheck
+		fmt.Fprintf(stderr, "%s: %s\n", cmdName("converge "+command), reply.Error) //nolint:errcheck
 		return errExit
 	}
 
