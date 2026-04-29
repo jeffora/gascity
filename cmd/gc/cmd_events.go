@@ -349,7 +349,7 @@ func resolveEventsScope(apiURLOverride string) (eventsAPIScope, error) {
 	if cityPath == "" {
 		return eventsAPIScope{}, fmt.Errorf(
 			"could not auto-discover the supervisor API; start the supervisor with %q or pass --api explicitly",
-			"gc supervisor start",
+			cmdName("supervisor start"),
 		)
 	}
 	// Standalone-controller mode: the controller's API now serves
@@ -373,7 +373,7 @@ func resolveEventsScope(apiURLOverride string) (eventsAPIScope, error) {
 	return eventsAPIScope{}, fmt.Errorf(
 		"could not auto-discover the supervisor API for %q; start the supervisor with %q or pass --api explicitly",
 		cityPath,
-		"gc supervisor start",
+		cmdName("supervisor start"),
 	)
 }
 

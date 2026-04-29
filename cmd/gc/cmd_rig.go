@@ -68,7 +68,7 @@ func newRigAddCmd(stdout, stderr io.Writer) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "add <path>",
 		Short: "Register a project as a rig",
-		Long: `Register an external project directory as a rig.
+		Long: fmt.Sprintf(`Register an external project directory as a rig.
 
 Initializes beads database, installs agent hooks if configured,
 generates cross-rig routes, and appends the rig to city.toml.
@@ -84,11 +84,11 @@ gc rig add probes the repo's origin/HEAD (and falls back to the currently
 checked-out branch) and stores the result in city.toml so polecats and the
 refinery target the right branch without manual metadata patching.
 Use --start-suspended to add the rig in a suspended state (dormant-by-default).
-The rig's agents won't spawn until explicitly resumed with "gc rig resume".
+The rig's agents won't spawn until explicitly resumed with "%s rig resume".
 
 Use --adopt to register a directory that already has a fully initialized
 .beads/ directory (must include both metadata.json and config.yaml).
-Skips beads init; the git repo check remains informational.`,
+Skips beads init; the git repo check remains informational.`, prog()),
 		Example: `  gc rig add /path/to/project
   gc rig add /path/to/project --name myrig
   gc rig add /path/to/project --prefix r1
@@ -1182,11 +1182,11 @@ func newRigSuspendCmd(stdout, stderr io.Writer) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "suspend [name]",
 		Short: "Suspend a rig (reconciler will skip its agents)",
-		Long: `Suspend a rig by setting suspended=true in city.toml.
+		Long: fmt.Sprintf(`Suspend a rig by setting suspended=true in city.toml.
 
 All agents scoped to the suspended rig are effectively suspended —
 the reconciler skips them and gc hook returns empty. The rig's beads
-database remains accessible. Use "gc rig resume" to restore.`,
+database remains accessible. Use "%s rig resume" to restore.`, prog()),
 		Args: cobra.ArbitraryArgs,
 		RunE: func(_ *cobra.Command, args []string) error {
 			if jsonOutput {
