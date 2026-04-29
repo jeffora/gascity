@@ -6,16 +6,18 @@ import (
 	"encoding/json"
 	"strconv"
 	"strings"
+
+	"github.com/gastownhall/gascity/internal/progname"
 )
 
-const (
-	labelBindingBase          = "gc:extmsg-binding"
-	labelDeliveryBase         = "gc:extmsg-delivery"
-	labelGroupBase            = "gc:extmsg-group"
-	labelGroupParticipantBase = "gc:extmsg-group-participant"
-	labelTranscriptBase       = "gc:extmsg-transcript"
-	labelMembershipBase       = "gc:extmsg-membership"
-	labelTranscriptStateBase  = "gc:extmsg-transcript-state"
+var (
+	labelBindingBase          = progname.Get() + ":extmsg-binding"
+	labelDeliveryBase         = progname.Get() + ":extmsg-delivery"
+	labelGroupBase            = progname.Get() + ":extmsg-group"
+	labelGroupParticipantBase = progname.Get() + ":extmsg-group-participant"
+	labelTranscriptBase       = progname.Get() + ":extmsg-transcript"
+	labelMembershipBase       = progname.Get() + ":extmsg-membership"
+	labelTranscriptStateBase  = progname.Get() + ":extmsg-transcript-state"
 
 	labelBindingConversationPrefix = "extmsg:binding:conv:v1:"
 	labelBindingSessionPrefix      = "extmsg:binding:session:v1:"

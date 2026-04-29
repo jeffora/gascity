@@ -17,6 +17,7 @@ import (
 	"github.com/gastownhall/gascity/internal/overlay"
 	"github.com/gastownhall/gascity/internal/runtime"
 	"github.com/gastownhall/gascity/internal/shellquote"
+	"github.com/gastownhall/gascity/internal/progname"
 )
 
 // Provider adapts [Tmux] to the [runtime.Provider] interface.
@@ -873,14 +874,14 @@ func runSessionSetup(ctx context.Context, ops startOps, name string, cfg runtime
 	// Run inline commands in order.
 	for i, cmd := range cfg.SessionSetup {
 		if err := ops.runSetupCommand(ctx, cmd, setupEnv, setupTimeout); err != nil {
-			_, _ = fmt.Fprintf(stderr, "gc: session_setup[%d] warning: %v\n", i, err)
+			_, _ = fmt.Fprintf(stderr, "%s: session_setup[%d] warning: %v\n", progname.Get(), i, err)
 		}
 	}
 
 	// Run script if configured.
 	if cfg.SessionSetupScript != "" {
 		if err := ops.runSetupCommand(ctx, cfg.SessionSetupScript, setupEnv, setupTimeout); err != nil {
-			_, _ = fmt.Fprintf(stderr, "gc: session_setup_script warning: %v\n", err)
+			_, _ = fmt.Fprintf(stderr, "%s: session_setup_script warning: %v\n", progname.Get(), err)
 		}
 	}
 }
@@ -902,7 +903,7 @@ func runSessionLive(ctx context.Context, ops startOps, name string, cfg runtime.
 
 	for i, cmd := range cfg.SessionLive {
 		if err := ops.runSetupCommand(ctx, cmd, setupEnv, setupTimeout); err != nil {
-			_, _ = fmt.Fprintf(stderr, "gc: session_live[%d] warning: %v\n", i, err)
+			_, _ = fmt.Fprintf(stderr, "%s: session_live[%d] warning: %v\n", progname.Get(), i, err)
 		}
 	}
 }
