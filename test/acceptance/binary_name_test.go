@@ -59,7 +59,7 @@ func TestBinaryName_BuildTimeDefault_Help(t *testing.T) {
 
 func TestBinaryName_Symlink_OverridesName(t *testing.T) {
 	dir := t.TempDir()
-	bin := buildBinaryWithName(t, dir, "city")
+	bin := buildBinaryWithName(t, dir, "testprog")
 
 	symPath := filepath.Join(dir, "meow")
 	if err := os.Symlink(bin, symPath); err != nil {
@@ -73,8 +73,8 @@ func TestBinaryName_Symlink_OverridesName(t *testing.T) {
 	if !strings.Contains(out, "meow") {
 		t.Errorf("expected help output to contain %q, got:\n%s", "meow", out)
 	}
-	if strings.Contains(out, "city") {
-		t.Errorf("expected help output NOT to contain build-time name %q when invoked as symlink, got:\n%s", "city", out)
+	if strings.Contains(out, "testprog") {
+		t.Errorf("expected help output NOT to contain build-time name %q when invoked as symlink, got:\n%s", "testprog", out)
 	}
 }
 
