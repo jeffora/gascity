@@ -1184,7 +1184,7 @@ func warnSupervisorLaunchdRollback(stderr io.Writer, format string, args ...any)
 	if stderr == nil {
 		return
 	}
-	fmt.Fprintf(stderr, "gc supervisor install: warning: restoring launchd service: "+format+"\n", args...) //nolint:errcheck // best-effort stderr
+	fmt.Fprintf(stderr, "%s: warning: restoring launchd service: "+format+"\n", append([]any{cmdName("supervisor install")}, args...)...) //nolint:errcheck // best-effort stderr
 }
 
 func legacySupervisorLaunchdPlistPath() string {
