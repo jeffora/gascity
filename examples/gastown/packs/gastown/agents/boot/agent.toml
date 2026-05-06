@@ -11,3 +11,8 @@ max_active_sessions = 1
 # older than watchdog_stale_threshold, boot fires to investigate.
 watchdog_target_template = "gastown.deacon"
 watchdog_stale_threshold = "1h"
+# Floor: even when the watchdog gate falls through (deacon's bead events
+# fall outside the events.jsonl tail window), bound the wake cadence
+# from the bead's last_woke_at so boot cannot respawn every ~70s on the
+# drain-followup poke.
+min_wake_interval = "5m"
