@@ -69,6 +69,7 @@ func runDropStage(report *CleanupReport, opts cleanupOptions) {
 		return
 	}
 
+	droppedNames := make([]string, 0, len(plan.ToDrop))
 	for _, name := range plan.ToDrop {
 		dropCtx, dropCancel := context.WithTimeout(context.Background(), cleanupDropTimeout)
 		err := opts.DoltClient.DropDatabase(dropCtx, name)
@@ -84,11 +85,14 @@ func runDropStage(report *CleanupReport, opts cleanupOptions) {
 				Error: err.Error(),
 			})
 			report.Summary.ErrorsTotal++
+			continue
 		}
+		droppedNames = append(droppedNames, name)
 	}
 	// Update the count to the actually-dropped tally so the summary
 	// matches the live world rather than the planned set.
-	report.Dropped.Count = len(plan.ToDrop) - len(report.Dropped.Failed)
+	report.Dropped.Names = droppedNames
+	report.Dropped.Count = len(droppedNames)
 }
 
 // sqlCleanupDoltClient wraps a *sql.DB to satisfy CleanupDoltClient.

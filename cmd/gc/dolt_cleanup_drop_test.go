@@ -61,11 +61,11 @@ func TestRunDoltCleanup_DryRunEnumeratesDropCandidatesWithoutDropping(t *testing
 
 	var stdout, stderr bytes.Buffer
 	opts := cleanupOptions{
-		Rigs:        rigs,
-		FS:          fsys.NewFake(),
-		JSON:        true,
-		Probe:       false,
-		DoltClient:  client,
+		Rigs:              rigs,
+		FS:                fsys.NewFake(),
+		JSON:              true,
+		Probe:             false,
+		DoltClient:        client,
 		DiscoverProcesses: func() ([]DoltProcInfo, error) { return nil, nil },
 	}
 	code := runDoltCleanup(opts, &stdout, &stderr)
@@ -154,6 +154,9 @@ func TestRunDoltCleanup_ForceRecordsDropFailureAndContinues(t *testing.T) {
 	wantDropped := []string{"testdb_a", "testdb_c"}
 	if !equalStringSlice(client.dropped, wantDropped) {
 		t.Errorf("dropped = %v, want %v", client.dropped, wantDropped)
+	}
+	if !equalStringSlice(r.Dropped.Names, wantDropped) {
+		t.Errorf("Dropped.Names = %v, want %v", r.Dropped.Names, wantDropped)
 	}
 	if len(r.Dropped.Failed) != 1 || r.Dropped.Failed[0].Name != "testdb_b" {
 		t.Errorf("Dropped.Failed = %+v, want one entry for testdb_b", r.Dropped.Failed)
