@@ -324,7 +324,6 @@ func doStart(args []string, controllerMode bool, stdout, stderr io.Writer) int {
 }
 
 func doStartWithNameOverride(args []string, controllerMode bool, stdout, stderr io.Writer, nameOverride string) int {
-	// Strict mode is on by default; --no-strict disables it only for the legacy standalone controller.
 	strictMode = !noStrictMode
 	if controllerMode || dryRunMode {
 		return doStartStandalone(args, controllerMode, stdout, stderr)
@@ -379,7 +378,7 @@ func doStartWithNameOverride(args []string, controllerMode bool, stdout, stderr 
 		for _, w := range nonFatalWarnings {
 			fmt.Fprintf(stderr, "gc start: warning: %s\n", w) //nolint:errcheck // best-effort stderr
 		}
-		fmt.Fprintln(stderr, "gc start: use --no-strict to disable strict checking") //nolint:errcheck // best-effort stderr
+		fmt.Fprintln(stderr, "gc start: to bypass, use --foreground --no-strict") //nolint:errcheck // best-effort stderr
 		return 1
 	}
 	if code := registerCityWithSupervisorNamed(cityPath, nameOverride, stdout, stderr, "gc start", true); code != 0 {
