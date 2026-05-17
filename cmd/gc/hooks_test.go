@@ -11,7 +11,8 @@ import (
 
 func TestInstallBeadHooksCreatesScripts(t *testing.T) {
 	dir := t.TempDir()
-	if err := installBeadHooks(dir); err != nil {
+	cityPath := t.TempDir()
+	if err := installBeadHooks(dir, cityPath); err != nil {
 		t.Fatalf("installBeadHooks: %v", err)
 	}
 
@@ -50,12 +51,18 @@ func TestInstallBeadHooksCreatesScripts(t *testing.T) {
 			if !strings.Contains(content, tc.eventType) {
 				t.Errorf("hook %s missing event type %q:\n%s", tc.filename, tc.eventType, content)
 			}
-			// Contains gc event emit.
+			// Contains gc-event-emit fast path with city-specific fallback files.
 			if !strings.Contains(content, `GC_BIN="${GC_BIN:-gc}"`) {
 				t.Errorf("hook %s missing GC_BIN fallback:\n%s", tc.filename, content)
 			}
-			if !strings.Contains(content, `"$GC_BIN" event emit`) {
-				t.Errorf("hook %s missing '\"$GC_BIN\" event emit':\n%s", tc.filename, content)
+			if !strings.Contains(content, `GC_EVENTS_SOCK="${GC_EVENTS_SOCK:-`+cityPath+`/.gc/events.sock}"`) {
+				t.Errorf("hook %s missing city events socket path:\n%s", tc.filename, content)
+			}
+			if !strings.Contains(content, `GC_EVENTS_PENDING="${GC_EVENTS_PENDING:-`+cityPath+`/.gc/events-pending.jsonl}"`) {
+				t.Errorf("hook %s missing city pending events path:\n%s", tc.filename, content)
+			}
+			if !strings.Contains(content, `gc-event-emit `+tc.eventType) {
+				t.Errorf("hook %s missing gc-event-emit fast path:\n%s", tc.filename, content)
 			}
 			if !strings.Contains(content, `PAYLOAD=$(printf '{"bead":%s}' "$DATA")`) {
 				t.Errorf("hook %s does not wrap bd JSON as BeadEventPayload:\n%s", tc.filename, content)
@@ -85,12 +92,13 @@ func TestInstallBeadHooksCreatesScripts(t *testing.T) {
 
 func TestInstallBeadHooksIdempotent(t *testing.T) {
 	dir := t.TempDir()
+	cityPath := t.TempDir()
 
 	// Install twice — should not error.
-	if err := installBeadHooks(dir); err != nil {
+	if err := installBeadHooks(dir, cityPath); err != nil {
 		t.Fatalf("first install: %v", err)
 	}
-	if err := installBeadHooks(dir); err != nil {
+	if err := installBeadHooks(dir, cityPath); err != nil {
 		t.Fatalf("second install: %v", err)
 	}
 
@@ -107,8 +115,9 @@ func TestInstallBeadHooksIdempotent(t *testing.T) {
 
 func TestInstallBeadHooksDoesNotRewriteUnchangedHooks(t *testing.T) {
 	dir := t.TempDir()
+	cityPath := t.TempDir()
 
-	if err := installBeadHooks(dir); err != nil {
+	if err := installBeadHooks(dir, cityPath); err != nil {
 		t.Fatalf("first install: %v", err)
 	}
 
@@ -118,7 +127,7 @@ func TestInstallBeadHooksDoesNotRewriteUnchangedHooks(t *testing.T) {
 		t.Fatalf("Chtimes: %v", err)
 	}
 
-	if err := installBeadHooks(dir); err != nil {
+	if err := installBeadHooks(dir, cityPath); err != nil {
 		t.Fatalf("second install: %v", err)
 	}
 
@@ -133,8 +142,9 @@ func TestInstallBeadHooksDoesNotRewriteUnchangedHooks(t *testing.T) {
 
 func TestInstallBeadHooksReplacesMatchingSymlink(t *testing.T) {
 	dir := t.TempDir()
+	cityPath := t.TempDir()
 
-	if err := installBeadHooks(dir); err != nil {
+	if err := installBeadHooks(dir, cityPath); err != nil {
 		t.Fatalf("first install: %v", err)
 	}
 
@@ -154,7 +164,7 @@ func TestInstallBeadHooksReplacesMatchingSymlink(t *testing.T) {
 		t.Skipf("Symlink: %v", err)
 	}
 
-	if err := installBeadHooks(dir); err != nil {
+	if err := installBeadHooks(dir, cityPath); err != nil {
 		t.Fatalf("second install: %v", err)
 	}
 
@@ -169,8 +179,9 @@ func TestInstallBeadHooksReplacesMatchingSymlink(t *testing.T) {
 
 func TestInstallBeadHooksCreatesDirectories(t *testing.T) {
 	dir := t.TempDir()
+	cityPath := t.TempDir()
 	// No pre-existing .beads/ directory.
-	if err := installBeadHooks(dir); err != nil {
+	if err := installBeadHooks(dir, cityPath); err != nil {
 		t.Fatalf("installBeadHooks: %v", err)
 	}
 
@@ -206,6 +217,13 @@ func TestInstallBeadHooksInitIntegration(t *testing.T) {
 	if _, err := os.Stat(hookPath); err != nil {
 		t.Errorf("gc init did not install bd hooks: %v", err)
 	}
+	data, err := os.ReadFile(hookPath)
+	if err != nil {
+		t.Fatalf("reading init hook: %v", err)
+	}
+	if !strings.Contains(string(data), filepath.Join(cityPath, ".gc", "events.sock")) {
+		t.Fatalf("init hook missing city event socket path:\n%s", string(data))
+	}
 }
 
 func TestInstallBeadHooksRigAddIntegration(t *testing.T) {
@@ -236,5 +254,12 @@ func TestInstallBeadHooksRigAddIntegration(t *testing.T) {
 	hookPath := filepath.Join(rigPath, ".beads", "hooks", "on_create")
 	if _, err := os.Stat(hookPath); err != nil {
 		t.Errorf("gc rig add did not install bd hooks: %v", err)
+	}
+	data, err := os.ReadFile(hookPath)
+	if err != nil {
+		t.Fatalf("reading rig hook: %v", err)
+	}
+	if !strings.Contains(string(data), filepath.Join(cityPath, ".gc", "events.sock")) {
+		t.Fatalf("rig hook missing city event socket path:\n%s", string(data))
 	}
 }
