@@ -655,14 +655,16 @@ func reloadSupervisor(stdout, stderr io.Writer) int {
 
 // managedCity tracks a running CityRuntime inside the supervisor.
 type managedCity struct {
-	cr         *CityRuntime
-	name       string // city name at launch — used for name-drift detection
-	started    bool
-	status     string
-	cancel     context.CancelFunc
-	done       chan struct{} // closed when the city goroutine exits
-	closer     io.Closer     // FileRecorder (or nil); closed on city stop
-	tombstoned atomic.Bool   // set before Remove() in shutdown paths for teardown safety
+	cr            *CityRuntime
+	name          string // city name at launch — used for name-drift detection
+	started       bool
+	status        string
+	cancel        context.CancelFunc
+	done          chan struct{} // closed when the city goroutine exits
+	closer        io.Closer     // FileRecorder (or nil); closed on city stop
+	eventRecorder events.Recorder
+	eventSocket   io.Closer
+	tombstoned    atomic.Bool // set before Remove() in shutdown paths for teardown safety
 }
 
 // deleteManagedCityIfCurrent prevents a stale city goroutine from removing
@@ -713,6 +715,9 @@ func stopManagedCity(mc *managedCity, cityPath string, stderr io.Writer) error {
 			if err := shutdownBeadsProvider(cityPath); err != nil {
 				fmt.Fprintf(stderr, "gc supervisor: city '%s': bead store: %v\n", mc.name, err) //nolint:errcheck
 			}
+			if mc.eventSocket != nil {
+				mc.eventSocket.Close() //nolint:errcheck
+			}
 			if mc.closer != nil {
 				mc.closer.Close() //nolint:errcheck
 			}
@@ -745,6 +750,9 @@ func stopManagedCity(mc *managedCity, cityPath string, stderr io.Writer) error {
 	}
 	if err := shutdownBeadsProvider(cityPath); err != nil {
 		fmt.Fprintf(stderr, "gc supervisor: city '%s': bead store: %v\n", mc.name, err) //nolint:errcheck
+	}
+	if mc.eventSocket != nil {
+		mc.eventSocket.Close() //nolint:errcheck
 	}
 	if mc.closer != nil {
 		mc.closer.Close() //nolint:errcheck
@@ -786,6 +794,9 @@ func stopManagedCityPreservingSessions(mc *managedCity, _ string, stderr io.Writ
 				stopErr = fmt.Errorf("city %q did not exit within %s after preserve-mode shutdown wait", mc.name, timeout)
 			}
 		}
+	}
+	if mc.eventSocket != nil {
+		mc.eventSocket.Close() //nolint:errcheck
 	}
 	if mc.closer != nil {
 		mc.closer.Close() //nolint:errcheck
@@ -959,6 +970,7 @@ func runSupervisor(stdout, stderr io.Writer) int {
 			}
 		}()
 		reconcileCities(reg, registry, supCfg.Publication, stdout, stderr)
+		drainRunningCityPendingEvents(registry, stderr)
 	}
 
 	// Initial reconcile.
@@ -1478,7 +1490,7 @@ func reconcileCities(
 		reloadReqCh := make(chan reloadRequest)
 		cityCtx, cityCancel := context.WithCancel(context.Background())
 		done := make(chan struct{})
-		mc := &managedCity{name: cityName, cancel: cityCancel, done: done, closer: fr}
+		mc := &managedCity{name: cityName, cancel: cityCancel, done: done, closer: fr, eventRecorder: fr}
 
 		convergenceReqCh := make(chan convergenceRequest, 16)
 		controlDispatcherCh := make(chan struct{}, 1)
@@ -1688,6 +1700,18 @@ func reconcileCities(
 			ul.SetUnlinkOnClose(false)
 		}
 
+		if fr != nil {
+			if err := drainPendingEventFile(path, fr, stderr); err != nil {
+				fmt.Fprintf(stderr, "gc supervisor: city '%s': drain pending events: %v\n", cityName, err) //nolint:errcheck
+			}
+			eventSock, eventSockErr := startEventSocket(path, fr, stderr)
+			if eventSockErr != nil {
+				fmt.Fprintf(stderr, "gc supervisor: city '%s': event socket: %v\n", cityName, eventSockErr) //nolint:errcheck
+			} else {
+				mc.eventSocket = eventSock
+			}
+		}
+
 		go func(n, p string, cityFr *events.FileRecorder, l net.Listener, sock string, origSockInfo os.FileInfo, lk *os.File) {
 			// Recovery and close(done) defer is pushed FIRST so it
 			// executes LAST (Go LIFO), preserving the invariant that
@@ -1773,6 +1797,11 @@ func reconcileCities(
 			// then done is closed.
 			defer lk.Close()                 //nolint:errcheck // release controller lock (last released)
 			defer convergence.RemoveToken(p) //nolint:errcheck // best-effort cleanup
+			defer func() {
+				if mc.eventSocket != nil {
+					mc.eventSocket.Close() //nolint:errcheck
+				}
+			}()
 			defer func() {
 				// Ownership-safe socket removal: only unlink if the
 				// on-disk file is the same one we created, so a

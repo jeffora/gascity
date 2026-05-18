@@ -9,6 +9,7 @@ BIN_DIR := $(shell go env GOPATH)/bin
 GOLANGCI_LINT := $(BIN_DIR)/golangci-lint
 
 BINARY     := gc
+EVENT_EMIT_BINARY := gc-event-emit
 BUILD_DIR  := bin
 INSTALL_DIR := $(BIN_DIR)
 
@@ -26,8 +27,10 @@ LDFLAGS := -X main.version=$(VERSION) \
 ## build: compile gc binary with version metadata
 build:
 	go build -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY) ./cmd/gc
+	go build -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(EVENT_EMIT_BINARY) ./cmd/gc-event-emit
 ifeq ($(shell uname),Darwin)
 	@codesign -s - -f $(BUILD_DIR)/$(BINARY) 2>/dev/null || true
+	@codesign -s - -f $(BUILD_DIR)/$(EVENT_EMIT_BINARY) 2>/dev/null || true
 	@echo "Signed $(BINARY) for macOS"
 endif
 
@@ -35,18 +38,26 @@ endif
 install: build
 	@mkdir -p $(INSTALL_DIR)
 	@rm -f $(INSTALL_DIR)/$(BINARY)
+	@rm -f $(INSTALL_DIR)/$(EVENT_EMIT_BINARY)
 	@cp $(BUILD_DIR)/$(BINARY) $(INSTALL_DIR)/$(BINARY)
+	@cp $(BUILD_DIR)/$(EVENT_EMIT_BINARY) $(INSTALL_DIR)/$(EVENT_EMIT_BINARY)
 	@# Migrate from old install location: replace stale binary with symlink
 	@if [ "$(INSTALL_DIR)" != "$(HOME)/.local/bin" ]; then \
 		if [ -f "$(HOME)/.local/bin/$(BINARY)" ] || [ -L "$(HOME)/.local/bin/$(BINARY)" ]; then \
 			rm -f "$(HOME)/.local/bin/$(BINARY)"; \
 		fi; \
+		if [ -f "$(HOME)/.local/bin/$(EVENT_EMIT_BINARY)" ] || [ -L "$(HOME)/.local/bin/$(EVENT_EMIT_BINARY)" ]; then \
+			rm -f "$(HOME)/.local/bin/$(EVENT_EMIT_BINARY)"; \
+		fi; \
 		if [ -d "$(HOME)/.local/bin" ]; then \
 			ln -sf "$(INSTALL_DIR)/$(BINARY)" "$(HOME)/.local/bin/$(BINARY)"; \
+			ln -sf "$(INSTALL_DIR)/$(EVENT_EMIT_BINARY)" "$(HOME)/.local/bin/$(EVENT_EMIT_BINARY)"; \
 			echo "Symlinked $(HOME)/.local/bin/$(BINARY) -> $(INSTALL_DIR)/$(BINARY)"; \
+			echo "Symlinked $(HOME)/.local/bin/$(EVENT_EMIT_BINARY) -> $(INSTALL_DIR)/$(EVENT_EMIT_BINARY)"; \
 		fi; \
 	fi
 	@echo "Installed $(BINARY) to $(INSTALL_DIR)/$(BINARY)"
+	@echo "Installed $(EVENT_EMIT_BINARY) to $(INSTALL_DIR)/$(EVENT_EMIT_BINARY)"
 
 ## generate: regenerate JSON schemas and reference docs
 generate:
@@ -59,7 +70,7 @@ check-schema: generate
 
 ## clean: remove build artifacts
 clean:
-	rm -f $(BUILD_DIR)/$(BINARY)
+	rm -f $(BUILD_DIR)/$(BINARY) $(BUILD_DIR)/$(EVENT_EMIT_BINARY)
 
 ## check: run fast quality gates (pre-commit: unit tests only)
 check: fmt-check lint vet test

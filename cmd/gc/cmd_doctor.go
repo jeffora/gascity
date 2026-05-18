@@ -186,6 +186,12 @@ func doDoctor(fix, verbose, jsonOut bool, stdout, stderr io.Writer) int {
 	d.Register(doctor.NewBinaryCheck("jq", "", exec.LookPath))
 	d.Register(doctor.NewBinaryCheck("pgrep", "", exec.LookPath))
 	d.Register(doctor.NewBinaryCheck("lsof", "", exec.LookPath))
+	d.Register(newEventEmitBinaryDoctorCheck(exec.LookPath))
+	if cfgErr == nil {
+		d.Register(newEventEmitHookPathDoctorCheck(cityPath, eventEmitHookRoots(cityPath, cfg)))
+	} else {
+		d.Register(newEventEmitHookPathDoctorCheck(cityPath, []string{cityPath}))
+	}
 	// beads.role must be set before any bd command runs; check it here so
 	// the missing-role error appears before the downstream data/Dolt checks
 	// that will all fail for the same root cause.
