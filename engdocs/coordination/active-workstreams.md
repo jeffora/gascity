@@ -171,6 +171,10 @@ merge state still blocked by review/merge-pipeline state rather than known
 branch test failures. One non-required Container Scan image-vulnerability check
 is failing.
 
+Mabel dequeued the individual JSON feeder PRs on 2026-05-18 PT by removing
+`status/reviewing` and prepending a superseded-by-#2349 banner to each PR body.
+They remain open as provenance until #2349 lands.
+
 Current JSON source of truth is this workstream section plus
 `codex/json-rollup`, not any individual JSON PR.
 
@@ -208,7 +212,8 @@ Integration fixes currently added directly on the rollup:
 Excluded / superseded by the first train:
 
 - #2288: superseded by #2317's adoption branch payload.
-- The individual JSON PRs listed above should be abandoned/closed once #2349 is
+- The individual JSON PRs listed above have been marked superseded and removed
+  from `status/reviewing`. They should be abandoned/closed once #2349 is
   accepted, because their payload is incorporated into the rollup.
 - Old local JSON fan-out worktrees are no longer needed for machine continuity;
   keep only if someone wants them for archaeology before deleting.
@@ -236,7 +241,8 @@ Urgency: yellow
 
 Reason: first-rollup scope is assembled, pushed, PR-visible, and validated
 enough for machine move. Mabel is now tracking #2349 through review/merge and
-will close/abandon superseded feeder PRs only after #2349 merges.
+has dequeued the superseded feeder PRs. Mabel will close/abandon those feeder
+PRs only after #2349 merges.
 
 Structured failure JSON policy:
 
@@ -312,7 +318,7 @@ Local-only JSON work state:
 
 ### Last Updated
 
-2026-05-18 20:50 PT by Mabel
+2026-05-18 22:05 PT by Mabel
 
 ### New Machine Bootstrap
 
