@@ -1,6 +1,6 @@
 # Active Workstream Coordination
 
-Last updated: 2026-05-18 20:22 PT by Mabel
+Last updated: 2026-05-18 21:53 PT by Mabel
 
 This is a temporary cross-agent coordination channel, not product documentation.
 Do not merge this file into public docs unless we explicitly promote it.
@@ -54,7 +54,8 @@ needed owner in `Reason`.
   `gastownhall/gascity:codex/pack-registry-workstream` commit `a64fb1ba`.
   Cleo verified that meaningful registry/gc pack work is pushed, old feeder
   branches are superseded or disposable, and the new machine does not need old
-  fan-out worktrees.
+  fan-out worktrees. Mabel re-ran the targeted readiness matrix on the old
+  machine at this checkpoint and found no validation blockers.
 - `green`: Jasmine's JSON work has a final machine-move checkpoint; the new
   machine does not need old JSON fan-out worktrees.
 - `yellow`: Mabel's coordination state is portable through this branch, but the
@@ -497,6 +498,14 @@ operations still come first inside that workstream.
 The registry/gc pack source of truth is now
 `gastownhall/gascity:codex/pack-registry-workstream`.
 
+Mabel refreshed live state on 2026-05-18 PT:
+
+- `gastownhall/gascity:codex/pack-registry-workstream` exists at `a64fb1ba`.
+- The old-machine worktree is clean at `a64fb1ba`.
+- The branch is five commits ahead of `gastownhall/main` and not behind it as
+  of `gastownhall/main@03c80562`.
+- No PR is currently open for `codex/pack-registry-workstream`.
+
 Dirty/unpushed work has been migrated and pushed. No meaningful local-only
 registry work should remain on the old machine.
 
@@ -528,9 +537,10 @@ Completed inside the workstream since the preservation checkpoint:
 
 Next milestone:
 
-- Review/fill any remaining command-surface gaps (`gc pack check`, future
-  dependency `list/show/outdated` shape, or explicit deferral), then run the
-  final review-pass matrix before opening a workstream PR.
+- Cleo should do one product-surface pass on remaining command-surface gaps
+  (`gc pack check`, future dependency `list/show/outdated` shape, or explicit
+  deferral), then open the workstream PR. Mabel's refreshed validation found no
+  branch-readiness blocker.
 
 ### Attention Needed
 
@@ -645,10 +655,17 @@ make check-docs
 git diff --check
 ```
 
-These targeted gates passed on the old machine at `a64fb1ba`. A broader
-`go test ./cmd/gc -count=1` attempt was stopped after running long with no
-additional output; use the targeted matrix above plus CI/full package testing as
-review prep.
+These targeted gates passed on the old machine at `a64fb1ba`. Mabel re-ran the
+same matrix on 2026-05-18 PT and all four commands passed again:
+
+- `go test ./internal/packsource ./internal/packregistry ./internal/packman ./internal/config`
+- `go test ./cmd/gc -run 'TestPackRegistry|TestPackRegistryJSON|TestPackAdd|TestPackSync|TestPackCommandTree|TestDoImport|TestImport|TestImportStateDoctor|TestDoDoctor|TestJSONSchema|TestJSONUnsupported|TestJSONExecutionFailure|TestSyncLock|TestCheckInstalled'`
+- `make check-docs`
+- `git diff --check`
+
+A broader `go test ./cmd/gc -count=1` attempt was previously stopped after
+running long with no additional output; use the targeted matrix above plus
+CI/full package testing as review prep.
 
 Additional required gates:
 
@@ -661,7 +678,7 @@ Additional required gates:
 
 ### Last Updated
 
-2026-05-18 20:22 PT by Mabel
+2026-05-18 21:53 PT by Mabel
 
 ## New Machine Bootstrap
 
