@@ -57,7 +57,7 @@ needed owner in `Reason`.
   `gastownhall/gascity:codex/pack-registry-workstream` commit `099f7ccf`.
   Cleo pushed the dependency-command/doctor parity wave on 2026-05-19 UTC.
   Local targeted tests, docs freshness, lint, and the Claude/Gemini/fresh-Codex
-  review council gate are complete. Live PR #2351 checks are newly pending;
+  review council gate are complete. Live PR #2351 required CI is green;
   draft PR #2351 remains open for visibility but is not queued for review.
 - `green`: Registry/gc pack design PR #2119 is closed as superseded by #2351.
   Landed #2129 remains the explicit `[[exports]]` design source; #2351 does
@@ -677,8 +677,8 @@ Current implementation worktree:
 - Current branch: `codex/pack-registry-workstream`
 - Pushed branch: `gastownhall/gascity:codex/pack-registry-workstream`
 - Current checkpoint commit: `099f7ccf`
-- State: pushed; local validation is green; live PR #2351 checks are pending;
-  PR remains draft/not queued.
+- State: pushed; local validation and live PR #2351 required CI are green; PR
+  remains draft/not queued.
 - Machine-move readiness: complete.
 
 Older local branches have been inspected and are not required by the new
@@ -719,9 +719,10 @@ previous stable-consumer bootstrap runtime above.
 
 Live #2351 state at `099f7ccf`:
 
-- New GitHub checks started after the push. At refresh time, `remove-label` was
-  queued and Mintlify Deployment was in progress; required CI had not yet
-  reported for the new commit.
+- Required CI is green at this checkpoint: `CI / required`, `CI / preflight`,
+  and `CI / integration` all passed, along with CodeQL, the `cmd/gc process`
+  shards, integration package shards, preflight static/generated-artifact gates,
+  dashboard checks, worker-core checks, and Mintlify deployment.
 - Merge state remains blocked by draft/review sequencing.
 - Branch is clean and pushed to `origin/codex/pack-registry-workstream`.
 
@@ -1059,9 +1060,8 @@ currently passes locally:
 - `make lint-full`
 - `git diff --check`
 
-Live GitHub CI for PR #2351 at `099f7ccf` was pending at the last refresh on
-2026-05-19 UTC. Do not mark the PR ready for review until required checks have
-reported and Donna's manual pass has had room to run.
+Live GitHub CI for PR #2351 at `099f7ccf` is green as of 2026-05-19 UTC. Do
+not mark the PR ready for review until Donna's manual pass has had room to run.
 
 Additional required gates:
 
@@ -1074,7 +1074,7 @@ Additional required gates:
 
 ### Last Updated
 
-2026-05-19 UTC by Cleo after `099f7ccf` dependency-command wave push
+2026-05-19 UTC by Cleo after `099f7ccf` CI-green refresh
 
 ## New Machine Bootstrap
 
