@@ -1,6 +1,6 @@
 # Active Workstream Coordination
 
-Last updated: 2026-05-18 22:22 PT by Mabel
+Last updated: 2026-05-19 PT by Mabel
 
 This is a temporary cross-agent coordination channel, not product documentation.
 Do not merge this file into public docs unless we explicitly promote it.
@@ -49,7 +49,8 @@ needed owner in `Reason`.
   behavior changes.
 - `green`: gc4gc / Operational Substrate is portable through
   `https://github.com/donbox/gc4gc`; stable and producer/dev branches are
-  published separately.
+  published separately. Grace bootstrapped the stable consumer setup on the
+  new machine and the handoff smoke passed.
 - `green`: Registry-gc-pack is final machine-move ready at
   `gastownhall/gascity:codex/pack-registry-workstream` commit `f82f3c4e`.
   Cleo verified that meaningful registry/gc pack work is pushed, old feeder
@@ -1144,11 +1145,18 @@ Owner: Grace
 
 The gc4gc side quest is in producer/consumer split mode.
 
+New-machine stable consumer bootstrap passed. Grace verified the stable
+consumer checkout, patched runtime checkout, and dry-run JSON sling smoke on
+the new machine. The dry-run returned success JSON for target
+`json-auditor-1` with method `bead`, `dry_run: true`, `routed: false`, and
+`queued: false`.
+
 Stable consumer state:
 
 - `/Users/dbox/repos/gc/gc4gc` is the stable consumer-facing copy.
 - Branch: `master`.
-- Latest known stable commit: `8d992e5 Point gc4gc at agent runtime checkout`.
+- Latest known stable commit:
+  `8d992e5336e20aaa70577ce58b368c72592a73cd`.
 - Remote: `https://github.com/donbox/gc4gc.git`.
 - Mabel/Codex may consume stable artifacts here without Grace mediating.
 
@@ -1157,7 +1165,8 @@ Producer/dev state:
 - `/Users/dbox/repos/gc/gc4gc-grace` is Grace's producer worktree.
 - Branch: `codex/gc4gc-producer-dev`.
 - Remote branch for current clean producer/dev baseline:
-  `codex/gc4gc-producer-dev` at commit `52e6ec3`.
+  `codex/gc4gc-producer-dev` at commit
+  `52e6ec344dbbe623d648e7f96114b777feab4598`.
 - Remote archival snapshot of Grace's old exact dev worktree:
   `codex/gc4gc-producer-snapshot-20260518` at commit `e38b97b`.
 - The snapshot branch preserves the old dirty/untracked producer state as Git
@@ -1165,6 +1174,8 @@ Producer/dev state:
 - Producer/dev may contain unpromoted or temporarily unstable producer changes.
 - Do not ask Mabel/Codex to consume dev-worktree runs unless explicitly
   requested.
+- Producer/dev checkout exists on the new machine but was not consumed during
+  stable consumer validation.
 
 Gas City runtime used by stable gc4gc:
 
@@ -1173,6 +1184,8 @@ Gas City runtime used by stable gc4gc:
 - That helper defaults to
   `/Users/dbox/repos/gc/gascity-agent-runtime`.
 - Expected runtime branch: `codex/gc4gc-agent-runtime-dolt-leak`.
+- New-machine runtime commit:
+  `631493c52046d44cd006662e3858d1e6efc67f85`.
 - Expected managed-Dolt leak fix commits include:
   - `bd6b0152 Fix managed Dolt test process leaks`
   - `9c205d19 Tighten Dolt leak guard cleanup`
@@ -1240,17 +1253,20 @@ Known unpromoted work:
 - Mabel uses stable gc4gc only when it helps current review/audit work.
 - Grace keeps producer/dev changes additive and unpromoted until canary,
   validation, and consumer-side verification are complete.
-- On the new machine, Mabel verifies the dry-run `gc sling --json` check from
-  the stable gc4gc checkout.
+- Cleo can safely consume stable gc4gc artifacts/lanes for registry/gc pack
+  work: `pack-pr-review` canary evidence, `gc-json-audit` docs/runbook/formula
+  and auditor lane, and stable `.runtime/runs/<run-id>/` core artifacts.
 
 ### Complete Victory Checklist
 
 Required for victory:
 
-- New machine can clone stable gc4gc and the patched Gas City runtime.
+- New machine can clone stable gc4gc and the patched Gas City runtime. Done.
 - Stable `gc-json.sh sling --json --dry-run --no-convoy --stdin
   json-auditor-1` returns successful dry-run JSON from the gc4gc checkout.
-- Mabel/Codex can consume stable run artifacts without Grace mediating.
+  Done.
+- Mabel/Codex can consume stable run artifacts without Grace mediating. Done
+  for the stable consumer surface.
 - Any producer changes are promoted through the documented
   producer/consumer process.
 - Product gaps discovered through gc4gc are filed or tied to existing issues.
@@ -1267,7 +1283,8 @@ Nice follow-up:
 
 ### Open Decisions / Blockers
 
-- No blocker for machine move; stable gc4gc is portable.
+- No blocker for machine move; stable gc4gc is portable and verified on the
+  new machine.
 - Open decision: when, if ever, to promote `pack-design-drift-check`.
 - Open decision: which product gaps discovered through gc4gc should enter the
   post-pack workstream versus the later V3/orchestration work.
@@ -1296,7 +1313,8 @@ Needs D. Box: no
 Urgency: green
 
 Reason: Handoff is published. Stable gc4gc can be consumed for current artifact
-inspection and JSON audit prep. No immediate human decision is required.
+inspection, JSON audit prep, and Cleo's registry/gc pack support work. No
+immediate human decision is required.
 
 ### Blockers / Cross-Workstream Risks
 
@@ -1426,4 +1444,4 @@ find .runtime/json-audit/20260516 -maxdepth 3 -type f -name report.md -print
 
 ### Last Updated
 
-2026-05-18 17:36 PT by Grace
+2026-05-19 PT by Mabel from Grace's new-machine bootstrap report
