@@ -38,8 +38,10 @@ needed owner in `Reason`.
 
 ## Current Attention Summary
 
-- `yellow`: JSON needs Jasmine to assemble and validate `codex/json-rollup`
-  before Cleo freezes registry command schemas/tests.
+- `yellow`: JSON rollup is partially assembled and pushed, but not yet
+  machine-move ready. Jasmine still needs to finish the first-rollup boundary,
+  run full validation, and publish the final abandon/close list for old JSON
+  PRs/branches.
 - `yellow`: Registry-gc-pack needs Mabel to flag any #2126 constraints that
   affect `gc import`, legacy `gc pack fetch/list`, or PackV2 import fields.
 - `green`: gc4gc / Operational Substrate is portable through
@@ -70,7 +72,9 @@ Mabel / coordination state:
 
 Known portable workstreams:
 
-- JSON: `gastownhall/gascity:codex/json-rollup` exists as Jasmine's rollup base.
+- JSON: `gastownhall/gascity:codex/json-rollup` exists and is populated with
+  most intended first-rollup work through pushed commit `d3014963`; it is not
+  yet final machine-move ready.
 - Registry/gc pack: `donbox/gascityworkplace:codex/pack-registry-workstream`
   exists at Cleo's pushed checkpoint.
 - gc4gc: `donbox/gc4gc:master`, `donbox/gc4gc:codex/gc4gc-producer-dev`, and
@@ -81,8 +85,9 @@ Known portable workstreams:
 
 Remaining move-readiness asks:
 
-- Jasmine: confirm no meaningful JSON rollup work is local-only after her next
-  checkpoint.
+- Jasmine: finish JSON rollup boundary/validation and publish a final
+  machine-move checkpoint that names incorporated, excluded, disposable, and
+  abandoned old JSON branches/PRs.
 - Cleo: confirm no meaningful registry/gc pack work is local-only after her
   next checkpoint.
 - Grace: no blocking ask; gc4gc is portable.
@@ -153,13 +158,15 @@ Jasmine owns the JSON rollout end to end. The previous many-small-PR strategy
 is replaced by a single JSON rollup / review-train PR so Julian can review one
 coherent `gc --json` / `--json-schema` surface instead of many small PRs.
 
-`codex/json-rollup` now exists and is pushed. It currently points at latest
-`origin/main`; train assembly has not started yet.
+`codex/json-rollup` now exists, is pushed, and is populated through commit
+`d3014963` (`fix: align json rollup integration`). It is not yet a final
+machine-move checkpoint because the first-rollup boundary and full validation
+are still in progress.
 
 Current JSON source of truth is this workstream section plus
 `codex/json-rollup`, not any individual JSON PR.
 
-Included provenance PRs for the first train, if they remain clean:
+Included provenance PRs already incorporated into `codex/json-rollup`:
 
 - #2317: schema-platform plumbing plus native management action JSON.
 - #2222: session detail JSON plus oddball/root command JSON.
@@ -174,12 +181,19 @@ Included provenance PRs for the first train, if they remain clean:
 - #2273: graph/converge/order/formula action summary JSON.
 - #2274: convoy/mail action summary JSON.
 - #2287: open passthrough/custom schema support.
+- #2256: service/skill inspection JSON, incorporated after preserving the
+  already-merged `skill list --json` contract and taking the service additions.
 
-Conditional include:
+Integration fixes currently added directly on the rollup:
 
-- #2256: service/skill inspection JSON. Earlier failed CI looked like
-  cancellation/flaky infra after local tests passed, but it must be revalidated
-  before inclusion.
+- Removed a duplicate `OrderFiringCurrentCheck.WarmupEligible` method that
+  blocked package builds after combining branches.
+- Aligned the `version --json` test with the preserved `versionJSONResult`
+  payload name.
+- Preserved the existing `skill list --json` payload (`count` / `entries`)
+  instead of switching to the alternate #2256 shape (`city_path` / `skills`).
+- Suppressed deprecated config warnings during chat auto-suspend config load so
+  auto-suspend tests are not polluted by unrelated stderr.
 
 Excluded from the first train unless repaired:
 
@@ -187,6 +201,15 @@ Excluded from the first train unless repaired:
 - #2270: local rebase branch had `TestAutoSuspendChatSessions` failure from
   deprecated `[[agent]]` warning leakage to stderr.
 - #2291: same local `TestAutoSuspendChatSessions` failure family as #2270.
+
+Not yet decided / remaining boundary work:
+
+- Confirm whether #2270 and #2291 should stay excluded/disposable now that the
+  auto-suspend warning leak is fixed in the rollup, or whether their useful
+  payloads should be cherry-picked and revalidated.
+- Confirm no remaining JSON PR branches contain useful first-rollup work outside
+  the incorporated list above.
+- Publish the old JSON PR/branch close-abandon list after the rollup PR exists.
 
 ### Interface Contracts Other Agents Must Honor
 
@@ -209,8 +232,10 @@ Needs D. Box: no
 
 Urgency: yellow
 
-Reason: Jasmine still needs to assemble and validate `codex/json-rollup`; Cleo
-should not freeze registry command schemas/tests until that update lands.
+Reason: Jasmine has pushed a substantial rollup checkpoint, but the branch is
+not yet machine-move ready. Cleo should not freeze registry command
+schemas/tests until Jasmine confirms the final rollup contract and validation
+status.
 
 Structured failure JSON policy:
 
@@ -232,22 +257,25 @@ Schema extension conventions:
 
 Validation matrix for `codex/json-rollup`:
 
-- `git diff --check`: pending for assembled train.
+- `git diff --check`: passed at pushed checkpoint `d3014963`.
 - `make fmt-check`: pending for assembled train.
 - `make vet`: pending for assembled train.
 - `make check-docs`: pending for assembled train.
 - `GOOS=linux make lint`: pending for assembled train.
-- `go test ./cmd/gc -run 'TestJSON|Test.*JSON|TestJSONSchema|TestJSONSchemaManifest|TestJSONCommandOutputMatchesDeclaredResultSchema' -count=1`: pending for assembled train.
-- `go test ./cmd/gc -count=1`: pending for assembled train.
+- `go test ./cmd/gc -run 'TestJSON|Test.*JSON|TestJSONSchema|TestJSONSchemaManifest|TestJSONCommandOutputMatchesDeclaredResultSchema|TestDo.*JSON|Test.*JSONOutput' -count=1`: passed at pushed checkpoint `d3014963`.
+- `go test ./cmd/gc -run 'TestAutoSuspendChatSessions|TestSkill|TestService|TestMail|TestConvoy|TestConverge|TestGraph|TestOrder' -count=1`: passed at pushed checkpoint `d3014963`.
+- `go test ./cmd/gc -count=1`: started after `d3014963`, but interrupted
+  before completion; no pass/fail result yet.
 - `gc4gc` smoke tests: pending for assembled train.
 
 Local-only JSON work state:
 
-- The rollup branch is pushed at `origin/codex/json-rollup`.
-- No meaningful rollup changes are local-only yet.
-- Existing local worktrees for #2270 and #2291 contain unmerged/rebased state
-  with known local test failures; they are excluded from the train until fixed
-  or explicitly discarded.
+- The rollup branch is pushed at `origin/codex/json-rollup` through `d3014963`.
+- No meaningful rollup code changes are currently local-only.
+- This coordination update is the current local-only state until pushed.
+- Existing local worktrees for #2270 and #2291 must not be deleted yet; they
+  contain the last known source state for excluded-but-not-finally-disposed
+  JSON work.
 
 ### Blockers / Cross-Workstream Risks
 
@@ -265,13 +293,16 @@ Local-only JSON work state:
 
 ### Needed From Other Agents
 
-- Jasmine: assemble and validate `codex/json-rollup`, then open the rollup PR.
+- Jasmine: finish first-rollup boundary decisions for #2270/#2291, run full
+  validation, open the rollup PR, and publish the branch/PR close-abandon list.
 - Cleo: flag any registry/gc pack command schema needs before freezing command
   output shapes.
+- Mabel: no blocking help needed yet; use this section as the current JSON
+  status if Donna asks from the Mabel thread.
 
 ### Last Updated
 
-2026-05-18 12:45 PT by Jasmine
+2026-05-18 17:43 PT by Jasmine
 
 ### New Machine Bootstrap
 
@@ -310,9 +341,11 @@ Worktrees to create:
 
 Local-only state:
 
-- None for the rollup branch.
+- None for rollup code through pushed commit `d3014963`.
+- This coordination checkpoint must be pushed before it is portable.
 - #2270 and #2291 old-machine worktrees have local/rebased state with known
-  failing tests and are intentionally excluded from the first train.
+  failing tests and are intentionally excluded from the first train unless
+  Jasmine decides to salvage them after the current rollup validation.
 
 Commands to validate setup:
 
@@ -345,11 +378,11 @@ Exact first prompt for Jasmine on a new machine:
 > `engdocs/coordination/active-workstreams.md` on
 > `origin/codex/workstream-coordination`. Clone/fetch `gastownhall/gascity`,
 > create worktrees for `codex/workstream-coordination` and
-> `codex/json-rollup`, then assemble the JSON train from the included
-> provenance PR branches in the documented order. Do not include #2270 or
-> #2291 unless their local failures are fixed. Preserve the accepted `--json`
-> / `--json-schema` contract and run the documented validation matrix before
-> opening or updating the rollup PR.
+> `codex/json-rollup`, then continue from pushed commit `d3014963`. Finish the
+> #2270/#2291 boundary decision, run the documented validation matrix, smoke
+> test against `gc4gc`, open the rollup PR, and publish the old JSON PR/branch
+> close-abandon list. Preserve the accepted `--json` / `--json-schema`
+> contract.
 
 ## Workstream Handoff
 
