@@ -78,6 +78,27 @@ var DiscoveryTargets = []Target{
 	},
 }
 
+// HeapInusePeakTarget is the memory ceiling from discovery.md: the store must
+// hold its working set in a bounded heap. Source: docs/coordination-store/
+// discovery.md §Targets (RAM ≤ 256MB HeapInuse peak).
+const HeapInusePeakTarget = 256 * 1024 * 1024
+
+// MemReport captures memory consumption observed during a workload run.
+// HeapInusePeak and RSSPeak are sampled peaks; AllocDelta is the cumulative
+// bytes allocated over the run (TotalAlloc end − start), a churn proxy.
+type MemReport struct {
+	// HeapInusePeak is the maximum runtime.MemStats.HeapInuse seen, in bytes.
+	HeapInusePeak uint64
+	// RSSPeak is the maximum process resident set size seen, in bytes,
+	// sampled from /proc/self/status (VmRSS). Zero if unavailable.
+	RSSPeak uint64
+	// AllocDelta is the total bytes allocated during the run
+	// (runtime.MemStats.TotalAlloc end − start).
+	AllocDelta uint64
+	// Sampled is true if at least one sample was collected.
+	Sampled bool
+}
+
 // ScorecardResult is the outcome of a single target check.
 type ScorecardResult struct {
 	Target Target
@@ -104,19 +125,29 @@ type Scorecard struct {
 	TotalOps int
 	// Errors is the total number of operation errors.
 	Errors int
+	// Mem holds memory consumption observed during the run.
+	Mem MemReport
+	// MemPass reports whether the HeapInusePeak target was met. Only
+	// meaningful when Mem.Sampled is true.
+	MemPass bool
 }
 
-// Passed returns true if all measured targets passed.
+// Passed returns true if all measured targets passed, including the memory
+// target when memory was sampled.
 func (s *Scorecard) Passed() bool {
 	for _, r := range s.Results {
 		if r.Measured && !r.Pass {
 			return false
 		}
 	}
+	if s.Mem.Sampled && !s.MemPass {
+		return false
+	}
 	return true
 }
 
-// PassCount returns the number of measured targets that passed.
+// PassCount returns the number of measured targets that passed, including the
+// memory target when memory was sampled.
 func (s *Scorecard) PassCount() int {
 	n := 0
 	for _, r := range s.Results {
@@ -124,10 +155,14 @@ func (s *Scorecard) PassCount() int {
 			n++
 		}
 	}
+	if s.Mem.Sampled && s.MemPass {
+		n++
+	}
 	return n
 }
 
-// TotalTargets returns the number of measured targets.
+// TotalTargets returns the number of measured targets, including the memory
+// target when memory was sampled.
 func (s *Scorecard) TotalTargets() int {
 	n := 0
 	for _, r := range s.Results {
@@ -135,14 +170,19 @@ func (s *Scorecard) TotalTargets() int {
 			n++
 		}
 	}
+	if s.Mem.Sampled {
+		n++
+	}
 	return n
 }
 
 // Score evaluates operation results against the discovery.md targets.
 // results maps operation name → OperationResult.
 // throughput maps operation name → ops/sec.
+// mem carries the memory consumption observed during the run; pass an empty
+// (Sampled=false) MemReport to skip the memory target.
 func Score(backend, workload string, dur time.Duration, totalOps, totalErrors int,
-	results map[string]*OperationResult, throughput map[string]float64,
+	results map[string]*OperationResult, throughput map[string]float64, mem MemReport,
 ) Scorecard {
 	sc := Scorecard{
 		Backend:  backend,
@@ -150,6 +190,8 @@ func Score(backend, workload string, dur time.Duration, totalOps, totalErrors in
 		Duration: dur,
 		TotalOps: totalOps,
 		Errors:   totalErrors,
+		Mem:      mem,
+		MemPass:  !mem.Sampled || mem.HeapInusePeak <= HeapInusePeakTarget,
 	}
 
 	for _, t := range DiscoveryTargets {
@@ -227,5 +269,42 @@ func (s *Scorecard) PrintTable(w io.Writer) {
 		fmt.Fprintf(w, "  %-*s  %-12s  %-12s  %-12s  %s\n", //nolint:errcheck
 			colW, r.Target.Name, p99, maxVal, tput, result)
 	}
+
+	if s.Mem.Sampled {
+		fmt.Fprintf(w, "\n  Memory:\n") //nolint:errcheck
+		memResult := "PASS"
+		if !s.MemPass {
+			memResult = fmt.Sprintf("FAIL  ← HeapInuse peak %s > target %s",
+				FormatBytes(s.Mem.HeapInusePeak), FormatBytes(HeapInusePeakTarget))
+		}
+		fmt.Fprintf(w, "  %-*s  %-12s  %s\n", //nolint:errcheck
+			colW, "HeapInuse peak (≤256MB)", FormatBytes(s.Mem.HeapInusePeak), memResult)
+		rss := "-"
+		if s.Mem.RSSPeak > 0 {
+			rss = FormatBytes(s.Mem.RSSPeak)
+		}
+		fmt.Fprintf(w, "  %-*s  %-12s\n", colW, "RSS peak", rss)                                      //nolint:errcheck
+		fmt.Fprintf(w, "  %-*s  %-12s\n", colW, "alloc delta (churn)", FormatBytes(s.Mem.AllocDelta)) //nolint:errcheck
+	}
+
 	fmt.Fprintln(w) //nolint:errcheck
+}
+
+// FormatBytes formats a byte count as a short human-readable string.
+func FormatBytes(b uint64) string {
+	const (
+		kib = 1024
+		mib = 1024 * kib
+		gib = 1024 * mib
+	)
+	switch {
+	case b >= gib:
+		return fmt.Sprintf("%.2fGiB", float64(b)/float64(gib))
+	case b >= mib:
+		return fmt.Sprintf("%.1fMiB", float64(b)/float64(mib))
+	case b >= kib:
+		return fmt.Sprintf("%.1fKiB", float64(b)/float64(kib))
+	default:
+		return fmt.Sprintf("%dB", b)
+	}
 }

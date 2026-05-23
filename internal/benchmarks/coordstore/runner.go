@@ -5,6 +5,10 @@ import (
 	"fmt"
 	"io"
 	"math/rand/v2"
+	"os"
+	"runtime"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -56,6 +60,11 @@ func (r *Runner) Run(ctx context.Context, w io.Writer) (Scorecard, error) {
 	deadline := time.Now().Add(wl.Duration)
 	ctx, cancel := context.WithDeadline(ctx, deadline)
 	defer cancel()
+
+	// Start the memory sampler before the workload so its peak captures the
+	// full run, including the hot working set under load.
+	mem := newMemSampler(200 * time.Millisecond)
+	mem.start()
 
 	var wg sync.WaitGroup
 	for range wl.Concurrency {
@@ -109,6 +118,8 @@ progressLoop:
 	wg.Wait()
 	dur := time.Since(start)
 
+	memReport := mem.stop()
+
 	// Build throughput map.
 	r.resultsMu.Lock()
 	defer r.resultsMu.Unlock()
@@ -129,7 +140,7 @@ progressLoop:
 	sc := Score(
 		"", wl.Name, dur,
 		int(totalOps.Load()), int(totalErrors.Load()),
-		r.results, throughput,
+		r.results, throughput, memReport,
 	)
 
 	fmt.Fprintf(w, "  workload %q done: %d ops in %s, %d errors\n", //nolint:errcheck
@@ -407,6 +418,107 @@ func opName(op opTag) string {
 		return "RecentScan"
 	}
 	return "unknown"
+}
+
+// memSampler periodically samples process memory during a workload run and
+// tracks the peak HeapInuse and RSS plus the total bytes allocated.
+type memSampler struct {
+	interval time.Duration
+	stopCh   chan struct{}
+	doneCh   chan struct{}
+
+	startTotalAlloc uint64
+	report          MemReport
+}
+
+func newMemSampler(interval time.Duration) *memSampler {
+	if interval <= 0 {
+		interval = 200 * time.Millisecond
+	}
+	return &memSampler{
+		interval: interval,
+		stopCh:   make(chan struct{}),
+		doneCh:   make(chan struct{}),
+	}
+}
+
+// start records the baseline allocation counter and launches the sampling
+// goroutine. The first sample is taken immediately so a fast workload still
+// produces a non-zero peak.
+func (m *memSampler) start() {
+	var ms runtime.MemStats
+	runtime.ReadMemStats(&ms)
+	m.startTotalAlloc = ms.TotalAlloc
+
+	go func() {
+		defer close(m.doneCh)
+		ticker := time.NewTicker(m.interval)
+		defer ticker.Stop()
+		m.sampleOnce()
+		for {
+			select {
+			case <-ticker.C:
+				m.sampleOnce()
+			case <-m.stopCh:
+				return
+			}
+		}
+	}()
+}
+
+// sampleOnce updates the running peaks from one observation.
+func (m *memSampler) sampleOnce() {
+	var ms runtime.MemStats
+	runtime.ReadMemStats(&ms)
+	if ms.HeapInuse > m.report.HeapInusePeak {
+		m.report.HeapInusePeak = ms.HeapInuse
+	}
+	if rss, ok := readRSSBytes(); ok && rss > m.report.RSSPeak {
+		m.report.RSSPeak = rss
+	}
+	m.report.Sampled = true
+}
+
+// stop halts sampling and waits for the sampler goroutine to exit before
+// taking the final sample, so m.report is only ever touched by one goroutine
+// at a time. It then computes the alloc delta and returns the report.
+func (m *memSampler) stop() MemReport {
+	close(m.stopCh)
+	<-m.doneCh
+
+	// Safe to mutate m.report here: the sampler goroutine has exited.
+	m.sampleOnce()
+	var ms runtime.MemStats
+	runtime.ReadMemStats(&ms)
+	if ms.TotalAlloc >= m.startTotalAlloc {
+		m.report.AllocDelta = ms.TotalAlloc - m.startTotalAlloc
+	}
+	return m.report
+}
+
+// readRSSBytes reads the resident set size from /proc/self/status (VmRSS).
+// Returns false on platforms without procfs or on read errors.
+func readRSSBytes() (uint64, bool) {
+	data, err := os.ReadFile("/proc/self/status")
+	if err != nil {
+		return 0, false
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if !strings.HasPrefix(line, "VmRSS:") {
+			continue
+		}
+		fields := strings.Fields(line)
+		// Expected form: "VmRSS:   123456 kB"
+		if len(fields) < 2 {
+			return 0, false
+		}
+		kb, err := strconv.ParseUint(fields[1], 10, 64)
+		if err != nil {
+			return 0, false
+		}
+		return kb * 1024, true
+	}
+	return 0, false
 }
 
 // CorrectnessChecker validates that a StoreAdapter satisfies the 18 FRs
