@@ -390,15 +390,15 @@ its observed effectiveness.
 | Issue field-change event (IV.3) | 75,933 | ~9,000 | n/a (FK cascade only) | implicit cascade on bead delete | tied to bead deletion (never happens) |
 | Wisp field-change event (IV.3) | 47,334 (21,445 orphan) | ~17,000 | n/a | **none** (no FK) | **broken — 45 % orphans** |
 | System event (IV.4) | 184 in jsonl | variable | n/a | log rotation | OK |
-| Dependency (V.3, HQ) | 13 | <1 | n/a | implicit cascade | OK (HQ is shallow) |
+| Dependency (V.3, HQ) | 13 | &lt;1 | n/a | implicit cascade | OK (HQ is shallow) |
 | Issue label (V.4) | 447 | ~50 | n/a | implicit cascade | OK |
 | Wisp label (V.4) | 23,106 (10,706 orphan) | ~10,500 | n/a | **none** (no FK) | **broken — 46 % orphans** |
 | Nudge queue item (V.5) | 0 today | bursts | per-delivery | dispatcher cleanup | OK |
 | Session-name lock (V.6) | 0 today | per-create | per-release | release on op | OK |
-| Rig route (VI.1) | 5 (jsonl) | <1 | rare | manual | OK |
-| Federation peer (VI.2) | 0 | <1 | rare | manual | OK |
-| bd memory `kv.memory.*` (VII.1) | 24 | <1 | manual `bd forget` | OK |
-| Custom status / type (VII.2) | 3 + 12 | <<1 | rare | manual | OK |
+| Rig route (VI.1) | 5 (jsonl) | &lt;1 | rare | manual | OK |
+| Federation peer (VI.2) | 0 | &lt;1 | rare | manual | OK |
+| bd memory `kv.memory.*` (VII.1) | 24 | &lt;1 | manual `bd forget` | OK |
+| Custom status / type (VII.2) | 3 + 12 | &lt;&lt;1 | rare | manual | OK |
 | Counters (VII.3) | 11 | per-create | n/a | n/a (monotonic) | OK |
 | Compaction snapshot (VIII.1) | 0 | (not running on this rig) | n/a | tier-2 graduation | not active |
 | Issue snapshot (VIII.2) | 0 | feature unused | — | — | n/a |
