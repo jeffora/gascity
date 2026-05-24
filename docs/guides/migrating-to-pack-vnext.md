@@ -96,7 +96,6 @@ directory has its own `pack.toml`, and the old "everything lives in
 - pack identity and compatibility metadata
 - imports
 - providers
-- pack-wide agent defaults
 - named sessions
 - pack-level patches
 - other pack-wide declarative policy
@@ -140,6 +139,7 @@ includes = ["packs/gastown"]
 # pack.toml
 [pack]
 name = "my-city"
+schema = 1
 
 [imports.gastown]
 source = "../shared/gastown"
@@ -173,11 +173,16 @@ source = "../shared/gastown"
 Use the city pack's `pack.toml` for city-wide imports. Use rig-scoped
 imports in `city.toml` when a pack should compose only into one rig.
 
-For remote imports, run `gc import install` after the import declarations
-are in place. That writes or repairs `packs.lock` and materializes the
-local cache. Use `gc import check` when you want a read-only validation
-pass: it reports missing or stale lock/cache state and points back to
-`gc import install` for repair.
+For remote imports, run the current import-install command after the import
+declarations are in place. Today that is `gc import install`: it writes or
+repairs `packs.lock` and materializes the local cache. Use `gc import check`
+when you want a read-only validation pass: it reports missing or stale
+lock/cache state and points back to `gc import install` for repair.
+
+> **Registry note:** #2351 adds `gc pack registry` discovery commands. Those
+> commands help you find registry records and durable sources; they do not make
+> registry handles such as `main:gastown` durable PackV2 import syntax. Keep
+> committed imports as `source` plus optional `version`.
 
 Those commands are about pack acquisition and cache state, not PackV1 to
 PackV2 migration. Use `gc doctor` for migration work.
@@ -232,7 +237,7 @@ defaults.
 - move each `[[agent]]` definition into `agents/<name>/`
 - move templated prompt content to `agents/<name>/prompt.template.md`
 - move agent-local overlay content to `agents/<name>/overlay/`
-- keep shared defaults in `[agent_defaults]` (in `pack.toml` for pack-wide, `city.toml` for city-level overrides)
+- keep city-owned defaults in `[agent_defaults]` in `city.toml`
 - keep pack-wide providers in `[providers.*]`
 
 If you are migrating a city, city-local agents are still just agents in
@@ -471,12 +476,12 @@ template inclusion.
 | `inject_fragments_append` on patches | Gone — same approach |
 | All `.md` files run through Go templates | Only `.template.md` files run through Go templates |
 
-For migration convenience, `[agent_defaults].append_fragments`
-auto-appends named fragments to `.template.md` prompts without editing
-each prompt file:
+For migration convenience, `[agent_defaults].append_fragments` in `city.toml`
+auto-appends named fragments to `.template.md` prompts without editing each
+prompt file:
 
 ```toml
-# pack.toml or city.toml
+# city.toml
 [agent_defaults]
 append_fragments = ["operational-awareness", "command-glossary"]
 ```
@@ -631,7 +636,7 @@ schema, plus the qualified rows that matter most during migration.
 | `workspace.name` | Workspace identity | Move to `.gc/site.toml` as `workspace_name`. Runtime identity resolves from registered alias (supervisor-managed flows), then site binding / legacy config, then directory basename. `pack.name` remains the portable definition identity and init-time default only. |
 | `workspace.prefix` | Workspace bead prefix | Move to `.gc/site.toml` as `workspace_prefix`. Runtime/API surfaces use the effective site-bound prefix when present and otherwise derive from the effective city name. |
 | `workspace.includes` | City-level pack composition | Move to `[imports.*]` in the root city `pack.toml`. |
-| `workspace.default_rig_includes` | Default pack composition for newly added rigs | Move each default include to `[defaults.rig.imports.<binding>]` entries in the root city `pack.toml`. |
+| `workspace.default_rig_includes` | Default pack composition for newly added rigs | Move each default include to `[defaults.rig.imports.<binding>]` entries in `city.toml`. |
 | `[providers.*]` | Named provider presets | Usually move to `[providers.*]` in the root city `pack.toml`, unless the setting is truly deployment-only. |
 | `[packs.*]` | Named remote pack sources used by includes | Collapse into `[imports.*]` entries. There should no longer be a separate `[packs.*]` registry in `city.toml`. |
 | `[[agent]]` | Inline agent definitions | Move to `agents/<name>/`, with optional `agent.toml`. |
@@ -661,7 +666,7 @@ schema, plus the qualified rows that matter most during migration.
 | `[session_sleep]` | Sleep policy defaults | Keep in `city.toml`. |
 | `[convergence]` | Convergence limits | Keep in `city.toml`. |
 | `[[service]]` | Workspace-owned service declarations | Keep in `city.toml` if they are deployment-owned services. |
-| `[agent_defaults]` | Defaults applied to agents in this city | Lives in both `pack.toml` (pack-wide portable defaults) and `city.toml` (city-level deployment overrides). City layers on top of pack. As of release v0.15.0, the actively-applied defaults are still narrow: `default_sling_formula` plus `[agent_defaults].append_fragments`. |
+| `[agent_defaults]` | Defaults applied to agents in this city | Keep in `city.toml`. The actively-applied defaults are still narrow: `default_sling_formula` plus `[agent_defaults].append_fragments`. |
 
 > **Schema contract note:** This rollout also changes the generated schema
 > contract: checked-in `city.toml` files and downstream validators must no
@@ -678,7 +683,7 @@ transitional pack fields that people are likely to have.
 | `[pack]` | Pack metadata | Keep in `pack.toml`. |
 | `pack.name` | Pack identity | Keep in `[pack]`. |
 | `pack.version` | Pack version | Keep in `[pack]`. |
-| `pack.schema` | Pack schema version | Keep in `[pack]`, updated to the new schema as needed. |
+| `pack.schema` | Pack schema version | Keep in `[pack]`; PackV2 currently uses `schema = 1`. |
 | `pack.requires_gc` | Minimum supported gc version | Keep in `[pack]`. |
 | `pack.city_agents` | City-vs-rig stamping hint in the old pack system | Revisit during migration. The new model prefers agent-local definition and scope rules instead of this field. |
 | `pack.includes` | Pack-to-pack composition | Replace with `[imports.*]` in `pack.toml`. |
