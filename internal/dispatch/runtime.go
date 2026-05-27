@@ -605,21 +605,10 @@ func processWorkflowFinalize(store beads.Store, bead beads.Bead, opts ProcessOpt
 		return ControlResult{}, fmt.Errorf("%s: resolving workflow outcome: %w", bead.ID, err)
 	}
 
-	// On success, propagate the closure across the gc.source_bead_id chain so
-	// parent source beads in other stores (e.g. the city-scope "Adopt PR"
-	// request that spawned a rig-scope mol-adopt-pr-v2 workflow) don't accumulate
-	// as orphans. Failures intentionally leave parent sources open so a human
-	// can investigate via list - the bead IS the audit handle.
-	if outcome == "pass" {
-		if err := preflightSourceBeadChain(store, rootID, opts); err != nil {
-			return ControlResult{}, recordWorkflowFinalizeError(store, bead.ID, fmt.Errorf("%s: preflighting source bead chain: %w", rootID, err))
-		}
-	}
 	// Close the root BEFORE the finalize bead. If the root close fails and
 	// the control-dispatcher crashes, the finalize bead stays open so the
-	// next serve cycle will retry. Source-chain propagation is preflighted first
-	// so retryable scan failures keep the root live for singleton scans, but
-	// source beads are not mutated until the root is durably closed.
+	// next serve cycle will retry. Source beads are not mutated until the root
+	// is durably closed.
 	if err := setOutcomeAndClose(store, rootID, outcome); err != nil {
 		if errors.Is(err, beads.ErrNotFound) {
 			if closeErr := setOutcomeAndClose(store, bead.ID, "missing_root"); closeErr != nil {
@@ -630,8 +619,25 @@ func processWorkflowFinalize(store beads.Store, bead beads.Bead, opts ProcessOpt
 		return ControlResult{}, recordWorkflowFinalizeError(store, bead.ID, fmt.Errorf("%s: completing workflow head: %w", rootID, err))
 	}
 	if outcome == "pass" {
-		if err := closeSourceBeadChain(store, rootID, opts); err != nil {
-			return ControlResult{}, recordWorkflowFinalizeError(store, bead.ID, fmt.Errorf("%s: closing source bead chain: %w", rootID, err))
+		rootAfter, err := store.Get(rootID)
+		if err != nil {
+			return ControlResult{}, recordWorkflowFinalizeError(store, bead.ID, fmt.Errorf("%s: reloading workflow root after close: %w", rootID, err))
+		}
+		if strings.EqualFold(strings.TrimSpace(rootAfter.Metadata["gc.formula_contract"]), "graph.v2") {
+			// graph.v2 finalization only closes the owned source anchor. It does
+			// not walk or scan the wider source chain.
+			if err := closeSourceBeadAnchor(store, rootID, opts); err != nil {
+				return ControlResult{}, recordWorkflowFinalizeError(store, bead.ID, fmt.Errorf("%s: closing source bead anchor: %w", rootID, err))
+			}
+		} else {
+			// Legacy workflow roots still propagate closure to their source-bead
+			// chain. Graph.v2 roots only close their owned source-work anchor.
+			if err := preflightSourceBeadChain(store, rootID, opts); err != nil {
+				return ControlResult{}, recordWorkflowFinalizeError(store, bead.ID, fmt.Errorf("%s: preflighting source bead chain: %w", rootID, err))
+			}
+			if err := closeSourceBeadChain(store, rootID, opts); err != nil {
+				return ControlResult{}, recordWorkflowFinalizeError(store, bead.ID, fmt.Errorf("%s: closing source bead chain: %w", rootID, err))
+			}
 		}
 	}
 	if err := setOutcomeAndClose(store, bead.ID, "pass"); err != nil {
@@ -654,7 +660,7 @@ func processWorkflowFinalize(store beads.Store, bead beads.Bead, opts ProcessOpt
 }
 
 func preflightSourceBeadChain(rootStore beads.Store, rootID string, opts ProcessOptions) error {
-	return walkSourceBeadChain(rootStore, rootID, opts, false)
+	return walkSourceBeadChain(rootStore, rootID, opts, false, maxSourceChainHops, false, true)
 }
 
 // closeSourceBeadChain walks gc.source_bead_id / gc.source_store_ref upward
@@ -665,17 +671,21 @@ func preflightSourceBeadChain(rootStore beads.Store, rootID string, opts Process
 // open for retry. This is what makes "Adopt PR" city-scope source beads
 // disappear from the human-visible queue once the rig-scope workflow merges.
 func closeSourceBeadChain(rootStore beads.Store, rootID string, opts ProcessOptions) error {
-	return walkSourceBeadChain(rootStore, rootID, opts, true)
+	return walkSourceBeadChain(rootStore, rootID, opts, true, maxSourceChainHops, false, true)
 }
 
-func walkSourceBeadChain(rootStore beads.Store, rootID string, opts ProcessOptions, mutate bool) error {
+func closeSourceBeadAnchor(rootStore beads.Store, rootID string, opts ProcessOptions) error {
+	return walkSourceBeadChain(rootStore, rootID, opts, true, 1, true, false)
+}
+
+func walkSourceBeadChain(rootStore beads.Store, rootID string, opts ProcessOptions, mutate bool, maxHops int, stopAfterFirst bool, scanLiveRoots bool) error {
 	currentStore := rootStore
 	currentID := rootID
 	currentRef := ""
 	excludeRootSourceRef := ""
 	resolvedStores := make(map[string]beads.Store)
 	visited := make(map[string]bool)
-	for hop := 0; hop < maxSourceChainHops; hop++ {
+	for hop := 0; hop < maxHops; hop++ {
 		current, err := currentStore.Get(currentID)
 		if err != nil {
 			if errors.Is(err, beads.ErrNotFound) {
@@ -733,14 +743,16 @@ func walkSourceBeadChain(rootStore beads.Store, rootID string, opts ProcessOptio
 				}
 				return fmt.Errorf("getting source bead %s in %s: %w", nextID, sourceChainStoreLabel(effectiveRef), err)
 			}
-			liveRoots, err := listLiveSourceWorkflowRoots(nextStore, nextID, effectiveRef, rootID, excludeRootSourceRef, opts)
-			if err != nil {
-				return fmt.Errorf("listing live workflows for source bead %s in %s: %w", nextID, sourceChainStoreLabel(effectiveRef), err)
-			}
-			if len(liveRoots) > 0 {
-				opts.tracef("close-source-chain root=%s stop reason=live_child_workflow source=%s ref=%s live_roots=%s", rootID, nextID, sourceChainStoreLabel(effectiveRef), sourceChainRootIDs(liveRoots))
-				stopWalk = true
-				return nil
+			if scanLiveRoots {
+				liveRoots, err := listLiveSourceWorkflowRoots(nextStore, nextID, effectiveRef, rootID, excludeRootSourceRef, opts)
+				if err != nil {
+					return fmt.Errorf("listing live workflows for source bead %s in %s: %w", nextID, sourceChainStoreLabel(effectiveRef), err)
+				}
+				if len(liveRoots) > 0 {
+					opts.tracef("close-source-chain root=%s stop reason=live_child_workflow source=%s ref=%s live_roots=%s", rootID, nextID, sourceChainStoreLabel(effectiveRef), sourceChainRootIDs(liveRoots))
+					stopWalk = true
+					return nil
+				}
 			}
 			if !mutate {
 				return nil
@@ -768,12 +780,15 @@ func walkSourceBeadChain(rootStore beads.Store, rootID string, opts ProcessOptio
 		if stopWalk {
 			return nil
 		}
+		if stopAfterFirst {
+			return nil
+		}
 		currentStore = nextStore
 		currentID = nextID
 		currentRef = effectiveRef
 	}
-	err := fmt.Errorf("source chain depth limit reached after %d hops", maxSourceChainHops)
-	opts.tracef("close-source-chain root=%s stop reason=depth_limit max_hops=%d", rootID, maxSourceChainHops)
+	err := fmt.Errorf("source chain depth limit reached after %d hops", maxHops)
+	opts.tracef("close-source-chain root=%s stop reason=depth_limit max_hops=%d", rootID, maxHops)
 	return err
 }
 

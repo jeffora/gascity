@@ -25,25 +25,36 @@ func ResolveSourcePath(path string) string {
 	return resolved
 }
 
-// PackRootFromSourcePath derives the pack root from a resolved formula source
+// PackRootForFormulaSource derives the pack root from a resolved formula source
 // path by walking upward to the nearest ancestor directory named "formulas".
-// If no such ancestor exists, it returns an empty string.
-func PackRootFromSourcePath(sourcePath string) string {
+// It returns false when the path has no formulas ancestor.
+func PackRootForFormulaSource(sourcePath string) (string, bool) {
 	sourcePath = strings.TrimSpace(sourcePath)
 	if sourcePath == "" {
-		return ""
+		return "", false
 	}
 
 	dir := filepath.Dir(sourcePath)
 	for {
 		if filepath.Base(dir) == "formulas" {
-			return filepath.Dir(dir)
+			return filepath.Dir(dir), true
 		}
 
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			return ""
+			return "", false
 		}
 		dir = parent
 	}
+}
+
+// PackRootFromSourcePath derives the pack root from a resolved formula source
+// path by walking upward to the nearest ancestor directory named "formulas".
+// If no such ancestor exists, it returns an empty string.
+func PackRootFromSourcePath(sourcePath string) string {
+	packRoot, ok := PackRootForFormulaSource(sourcePath)
+	if !ok {
+		return ""
+	}
+	return packRoot
 }

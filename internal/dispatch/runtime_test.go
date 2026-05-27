@@ -1460,13 +1460,13 @@ func TestProcessWorkflowFinalizeOrphanedRootReportsFinalizerCloseFailure(t *test
 }
 
 // TestProcessWorkflowFinalizeClosesCrossStoreSourceBead verifies that when a
-// graph workflow finalizes successfully, the engine closes any source bead
-// chain that crosses store boundaries. This is the PR-review case: the city
-// scope holds the human-visible "Adopt PR" source bead, and the rig scope
-// holds the launch bead + workflow root that the operator drives. Without
-// this propagation, the city source bead stays open forever even after the
-// PR is merged and the rig workflow is fully closed - the only way to know
-// the request finished is to read metadata, not list status.
+// graph workflow finalizes successfully, the engine closes the owned source
+// anchor in the workflow's native store without walking farther up the chain.
+// This is the PR-review case: the city scope holds the human-visible "Adopt
+// PR" source bead, and the rig scope holds the launch bead + workflow root
+// that the operator drives. The finalize path closes the rig launch anchor,
+// but the upstream city source bead stays open so the request remains visible
+// as the durable input record.
 //
 // Wiring under test:
 //   - city store: city source bead (the original "Adopt PR" request)
@@ -1579,20 +1579,17 @@ func TestProcessWorkflowFinalizeClosesCrossStoreSourceBead(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get city source bead: %v", err)
 	}
-	if citySourceAfter.Status != "closed" {
-		t.Fatalf("city source bead status = %q, want closed (cross-store closure on successful finalize)", citySourceAfter.Status)
+	if citySourceAfter.Status != "open" {
+		t.Fatalf("city source bead status = %q, want open after direct-anchor finalize", citySourceAfter.Status)
 	}
-	if got := citySourceAfter.Metadata["gc.outcome"]; got != "pass" {
-		t.Errorf("city source bead gc.outcome = %q, want %q", got, "pass")
+	if got := citySourceAfter.Metadata["pr_review.workflow_status"]; got != "running" {
+		t.Errorf("city source bead pr_review.workflow_status = %q, want running", got)
 	}
-	if got := citySourceAfter.Metadata["pr_review.workflow_status"]; got != "completed" {
-		t.Errorf("city source bead pr_review.workflow_status = %q, want completed", got)
+	if got := citySourceAfter.Metadata["pr_review.final_pr_url"]; got != "" {
+		t.Errorf("city source bead final PR URL = %q, want no propagation", got)
 	}
-	if got := citySourceAfter.Metadata["pr_review.final_pr_url"]; got != "https://github.com/gastownhall/example/pull/1" {
-		t.Errorf("city source bead final PR URL = %q, want propagated final PR URL", got)
-	}
-	if got := citySourceAfter.Metadata["workflow_id"]; got != "wf-1" {
-		t.Errorf("city source bead workflow_id = %q, want propagated workflow id", got)
+	if got := citySourceAfter.Metadata["workflow_id"]; got != "" {
+		t.Errorf("city source bead workflow_id = %q, want no propagation", got)
 	}
 }
 
@@ -1681,7 +1678,7 @@ func sourceChainFixtureStores(f sourceChainFinalizeFixture) func() ([]SourceWork
 	}
 }
 
-func TestProcessWorkflowFinalizeRetriesWhenSourceStoreResolverFails(t *testing.T) {
+func TestProcessWorkflowFinalizeIgnoresSourceStoreResolverForGraphV2(t *testing.T) {
 	t.Parallel()
 
 	f := newSourceChainFinalizeFixture(t)
@@ -1695,25 +1692,35 @@ func TestProcessWorkflowFinalizeRetriesWhenSourceStoreResolverFails(t *testing.T
 	_, err := ProcessControl(f.rigStore, f.finalizer, ProcessOptions{
 		ResolveStoreRef: resolver,
 	})
-	if err == nil {
-		t.Fatal("ProcessControl(workflow-finalize) err = nil, want retryable resolver error")
-	}
-	if !strings.Contains(err.Error(), "city store unavailable") {
-		t.Fatalf("ProcessControl error = %v, want city store resolver failure", err)
+	if err != nil {
+		t.Fatalf("ProcessControl(workflow-finalize): %v", err)
 	}
 	finalizerAfter, err := f.rigStore.Get(f.finalizer.ID)
 	if err != nil {
 		t.Fatalf("get finalizer: %v", err)
 	}
-	if finalizerAfter.Status == "closed" {
-		t.Fatal("finalizer status = closed; want open so source-chain resolver failure is retryable")
+	if finalizerAfter.Status != "closed" {
+		t.Fatalf("finalizer status = %q, want closed", finalizerAfter.Status)
 	}
-	citySourceAfter, err := f.cityStore.Get(f.citySource.ID)
-	if err != nil {
-		t.Fatalf("get city source: %v", err)
-	}
-	if citySourceAfter.Status == "closed" {
-		t.Fatal("city source status = closed; want open after failed source-chain propagation")
+	for _, check := range []struct {
+		name  string
+		store beads.Store
+		id    string
+	}{
+		{name: "rig launch", store: f.rigStore, id: f.rigLaunch.ID},
+		{name: "city source", store: f.cityStore, id: f.citySource.ID},
+	} {
+		got, getErr := check.store.Get(check.id)
+		if getErr != nil {
+			t.Fatalf("get %s: %v", check.name, getErr)
+		}
+		wantStatus := "open"
+		if check.name == "rig launch" {
+			wantStatus = "closed"
+		}
+		if got.Status != wantStatus {
+			t.Fatalf("%s status = %q, want %s", check.name, got.Status, wantStatus)
+		}
 	}
 }
 
@@ -1743,7 +1750,7 @@ func (s updateErrorStore) Update(id string, opts beads.UpdateOpts) error {
 	return s.Store.Update(id, opts)
 }
 
-func TestProcessWorkflowFinalizeRetriesWhenSourceBeadLookupFails(t *testing.T) {
+func TestProcessWorkflowFinalizeIgnoresSourceBeadLookupForGraphV2(t *testing.T) {
 	t.Parallel()
 
 	f := newSourceChainFinalizeFixture(t)
@@ -1758,22 +1765,19 @@ func TestProcessWorkflowFinalizeRetriesWhenSourceBeadLookupFails(t *testing.T) {
 	_, err := ProcessControl(f.rigStore, f.finalizer, ProcessOptions{
 		ResolveStoreRef: resolver,
 	})
-	if err == nil {
-		t.Fatal("ProcessControl(workflow-finalize) err = nil, want retryable parent lookup error")
-	}
-	if !strings.Contains(err.Error(), lookupErr.Error()) {
-		t.Fatalf("ProcessControl error = %v, want parent lookup failure", err)
+	if err != nil {
+		t.Fatalf("ProcessControl(workflow-finalize): %v", err)
 	}
 	finalizerAfter, err := f.rigStore.Get(f.finalizer.ID)
 	if err != nil {
 		t.Fatalf("get finalizer: %v", err)
 	}
-	if finalizerAfter.Status == "closed" {
-		t.Fatal("finalizer status = closed; want open so parent lookup failure is retryable")
+	if finalizerAfter.Status != "closed" {
+		t.Fatalf("finalizer status = %q, want closed", finalizerAfter.Status)
 	}
 }
 
-func TestProcessWorkflowFinalizeClosesSourcesUnderProvidedLock(t *testing.T) {
+func TestProcessWorkflowFinalizeSkipsSourceChainForGraphV2(t *testing.T) {
 	t.Parallel()
 
 	f := newSourceChainFinalizeFixture(t)
@@ -1789,12 +1793,29 @@ func TestProcessWorkflowFinalizeClosesSourcesUnderProvidedLock(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("ProcessControl(workflow-finalize): %v", err)
 	}
-	want := []string{
-		"rig:test\x00" + f.rigLaunch.ID,
-		"city:test\x00" + f.citySource.ID,
-	}
+	want := []string{"rig:test\x00" + f.rigLaunch.ID}
 	if !slices.Equal(locked, want) {
 		t.Fatalf("locked source beads = %q, want %q", locked, want)
+	}
+	for _, check := range []struct {
+		name  string
+		store beads.Store
+		id    string
+	}{
+		{name: "rig launch", store: f.rigStore, id: f.rigLaunch.ID},
+		{name: "city source", store: f.cityStore, id: f.citySource.ID},
+	} {
+		got, err := check.store.Get(check.id)
+		if err != nil {
+			t.Fatalf("get %s: %v", check.name, err)
+		}
+		wantStatus := "open"
+		if check.name == "rig launch" {
+			wantStatus = "closed"
+		}
+		if got.Status != wantStatus {
+			t.Fatalf("%s status = %q, want %s", check.name, got.Status, wantStatus)
+		}
 	}
 }
 
@@ -1912,12 +1933,23 @@ func TestProcessWorkflowFinalizeConvergesUnderConcurrentSharedAncestor(t *testin
 			t.Fatalf("%s has %s=%q, want none", bead.ID, workflowFinalizeErrorMetadataKey, after.Metadata[workflowFinalizeErrorMetadataKey])
 		}
 	}
-	citySourceAfter := mustGetBead(t, cityStore, citySource.ID)
-	if citySourceAfter.Status != "closed" {
-		t.Fatalf("city source status = %q, want closed after both shared descendants finalize", citySourceAfter.Status)
-	}
-	if got := citySourceAfter.Metadata["gc.outcome"]; got != "pass" {
-		t.Fatalf("city source gc.outcome = %q, want pass", got)
+	for _, check := range []struct {
+		name  string
+		store beads.Store
+		id    string
+	}{
+		{name: "launch a", store: rigStore, id: launchA.ID},
+		{name: "launch b", store: rigStore, id: launchB.ID},
+		{name: "city source", store: cityStore, id: citySource.ID},
+	} {
+		got := mustGetBead(t, check.store, check.id)
+		wantStatus := "open"
+		if check.name == "launch a" || check.name == "launch b" {
+			wantStatus = "closed"
+		}
+		if got.Status != wantStatus {
+			t.Fatalf("%s status = %q, want %s after graph.v2 finalize", check.name, got.Status, wantStatus)
+		}
 	}
 }
 
@@ -1938,8 +1970,8 @@ func TestProcessWorkflowFinalizePreservesExistingParentOutcome(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get city source: %v", err)
 	}
-	if citySourceAfter.Status != "closed" {
-		t.Fatalf("city source status = %q, want closed", citySourceAfter.Status)
+	if citySourceAfter.Status != "open" {
+		t.Fatalf("city source status = %q, want open", citySourceAfter.Status)
 	}
 	if got := citySourceAfter.Metadata["gc.outcome"]; got != "quarantined" {
 		t.Fatalf("city source gc.outcome = %q, want preexisting outcome %q", got, "quarantined")
@@ -2013,28 +2045,42 @@ func TestProcessWorkflowFinalizeRecordsSourceWorkflowStoreScanFailure(t *testing
 			return nil, scanErr
 		},
 	})
-	if err == nil {
-		t.Fatal("ProcessControl(workflow-finalize) err = nil, want source-workflow store scan failure")
-	}
-	if !strings.Contains(err.Error(), scanErr.Error()) {
-		t.Fatalf("ProcessControl error = %v, want scan failure", err)
+	if err != nil {
+		t.Fatalf("ProcessControl(workflow-finalize): %v", err)
 	}
 	workflowAfter, err := f.rigStore.Get(f.workflow.ID)
 	if err != nil {
 		t.Fatalf("get workflow root: %v", err)
 	}
-	if workflowAfter.Status == "closed" {
-		t.Fatal("workflow root status = closed; want open when source-workflow scan preflight fails")
+	if workflowAfter.Status != "closed" {
+		t.Fatalf("workflow root status = %q, want closed", workflowAfter.Status)
 	}
 	finalizerAfter, err := f.rigStore.Get(f.finalizer.ID)
 	if err != nil {
 		t.Fatalf("get finalizer: %v", err)
 	}
-	if finalizerAfter.Status == "closed" {
-		t.Fatal("finalizer status = closed; want open when source-workflow scan preflight fails")
+	if finalizerAfter.Status != "closed" {
+		t.Fatalf("finalizer status = %q, want closed", finalizerAfter.Status)
 	}
-	if got := finalizerAfter.Metadata["gc.last_finalize_error"]; !strings.Contains(got, scanErr.Error()) {
-		t.Fatalf("finalizer gc.last_finalize_error = %q, want scan failure", got)
+	for _, check := range []struct {
+		name  string
+		store beads.Store
+		id    string
+	}{
+		{name: "rig launch", store: f.rigStore, id: f.rigLaunch.ID},
+		{name: "city source", store: f.cityStore, id: f.citySource.ID},
+	} {
+		got, getErr := check.store.Get(check.id)
+		if getErr != nil {
+			t.Fatalf("get %s: %v", check.name, getErr)
+		}
+		wantStatus := "open"
+		if check.name == "rig launch" {
+			wantStatus = "closed"
+		}
+		if got.Status != wantStatus {
+			t.Fatalf("%s status = %q, want %s", check.name, got.Status, wantStatus)
+		}
 	}
 }
 
@@ -2108,14 +2154,8 @@ func TestProcessWorkflowFinalizeLeavesAncestorOpenWhenLiveRootExistsInAnotherSto
 		t.Fatalf("city source status = %q, want open while %s is live", citySourceAfter.Status, otherRoot.ID)
 	}
 	traceText := trace.String()
-	for _, want := range []string{
-		"reason=live_child_workflow",
-		"source=" + f.citySource.ID,
-		"live_roots=" + otherRoot.ID,
-	} {
-		if !strings.Contains(traceText, want) {
-			t.Fatalf("trace missing %q:\n%s", want, traceText)
-		}
+	if !strings.Contains(traceText, "closed source="+f.rigLaunch.ID) {
+		t.Fatalf("trace missing direct anchor close:\n%s", traceText)
 	}
 }
 
@@ -2188,9 +2228,8 @@ func TestProcessWorkflowFinalizeLeavesSharedAncestorOpenForIndirectLiveRoot(t *t
 	}
 	traceText := trace.String()
 	for _, want := range []string{
-		"reason=live_child_workflow",
-		"source=" + f.citySource.ID,
-		"live_roots=" + otherRoot.ID,
+		"closed source=" + f.rigLaunch.ID,
+		"ref=rig:test",
 	} {
 		if !strings.Contains(traceText, want) {
 			t.Fatalf("trace missing %q:\n%s", want, traceText)
@@ -2312,8 +2351,8 @@ func TestProcessWorkflowFinalizeStopsOnSourceChainCycle(t *testing.T) {
 	if parentAfter.Status != "closed" {
 		t.Fatalf("parent status = %q, want closed before cycle stop", parentAfter.Status)
 	}
-	if got := strings.Count(trace.String(), "reason=cycle"); got != 2 {
-		t.Fatalf("cycle trace count = %d, want 2:\n%s", got, trace.String())
+	if got := strings.Count(trace.String(), "reason=cycle"); got != 0 {
+		t.Fatalf("cycle trace count = %d, want 0:\n%s", got, trace.String())
 	}
 }
 
@@ -2648,35 +2687,32 @@ func TestProcessWorkflowFinalizeKeepsFinalizerOpenWhenSourceStoreReadFails(t *te
 	_, err := ProcessControl(rigStore, finalizer, ProcessOptions{
 		ResolveStoreRef: resolver,
 	})
-	if err == nil {
-		t.Fatal("ProcessControl(workflow-finalize) error = nil, want source-store read failure")
-	}
-	if !strings.Contains(err.Error(), "city store read failed") {
-		t.Fatalf("ProcessControl(workflow-finalize) error = %v, want source-store read failure context", err)
+	if err != nil {
+		t.Fatalf("ProcessControl(workflow-finalize): %v", err)
 	}
 
 	finalizerAfter, err := rigStore.Get(finalizer.ID)
 	if err != nil {
 		t.Fatalf("get workflow finalizer: %v", err)
 	}
-	if finalizerAfter.Status != "open" {
-		t.Fatalf("workflow finalizer status = %q, want open so source-chain closure can retry", finalizerAfter.Status)
+	if finalizerAfter.Status != "closed" {
+		t.Fatalf("workflow finalizer status = %q, want closed", finalizerAfter.Status)
 	}
 
 	workflowAfter, err := rigStore.Get(workflow.ID)
 	if err != nil {
 		t.Fatalf("get workflow root: %v", err)
 	}
-	if workflowAfter.Status != "open" {
-		t.Fatalf("workflow root status = %q, want open because source-chain preflight failed", workflowAfter.Status)
+	if workflowAfter.Status != "closed" {
+		t.Fatalf("workflow root status = %q, want closed", workflowAfter.Status)
 	}
 
 	rigLaunchAfter, err := rigStore.Get(rigLaunch.ID)
 	if err != nil {
 		t.Fatalf("get rig launch bead: %v", err)
 	}
-	if rigLaunchAfter.Status != "open" {
-		t.Fatalf("rig launch bead status = %q, want open because source-chain preflight failed", rigLaunchAfter.Status)
+	if rigLaunchAfter.Status != "closed" {
+		t.Fatalf("rig launch bead status = %q, want closed", rigLaunchAfter.Status)
 	}
 
 	citySourceAfter, err := cityStore.Get(citySource.ID)
@@ -2684,7 +2720,7 @@ func TestProcessWorkflowFinalizeKeepsFinalizerOpenWhenSourceStoreReadFails(t *te
 		t.Fatalf("get city source bead: %v", err)
 	}
 	if citySourceAfter.Status != "open" {
-		t.Fatalf("city source bead status = %q, want open after source-store read failure", citySourceAfter.Status)
+		t.Fatalf("city source bead status = %q, want open after graph.v2 finalize", citySourceAfter.Status)
 	}
 }
 

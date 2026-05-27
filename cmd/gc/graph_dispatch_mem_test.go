@@ -63,10 +63,18 @@ func beadRef(bead beads.Bead) string {
 }
 
 func graphWorktreeOwnerID(source beads.Bead) string {
+	if source.Type == "convoy" && strings.EqualFold(strings.TrimSpace(source.Metadata["gc.synthetic_kind"]), "drain-unit-convoy") {
+		if owner := strings.TrimSpace(source.Metadata["gc.drain_member_id"]); owner != "" {
+			return owner
+		}
+	}
+	if source.ID != "" {
+		return source.ID
+	}
 	if owner := strings.TrimSpace(source.Metadata["gc.drain_member_id"]); owner != "" {
 		return owner
 	}
-	return source.ID
+	return ""
 }
 
 func selectExecutableGraphWorkerBead(ready []beads.Bead, assignee string) (beads.Bead, bool, error) {
@@ -425,25 +433,39 @@ func TestGraphWorkflowInMemoryCreateExecuteWaitFlow(t *testing.T) {
 	}
 }
 
-func TestGraphWorktreeOwnerIDPrefersDrainMember(t *testing.T) {
+func TestGraphWorktreeOwnerIDPrefersDrainMemberForDrainUnitConvoy(t *testing.T) {
 	source := beads.Bead{
-		ID: "convoy-1",
+		ID:   "convoy-1",
+		Type: "convoy",
 		Metadata: map[string]string{
+			"gc.synthetic_kind":  "drain-unit-convoy",
 			"gc.drain_member_id": "member-9",
 		},
 	}
 	if got := graphWorktreeOwnerID(source); got != "member-9" {
 		t.Fatalf("graphWorktreeOwnerID = %q, want member-9", got)
 	}
+}
 
-	if got := graphWorktreeOwnerID(beads.Bead{ID: "convoy-2"}); got != "convoy-2" {
+func TestGraphWorktreeOwnerIDUsesConvoyBoundaryOtherwise(t *testing.T) {
+	if got := graphWorktreeOwnerID(beads.Bead{ID: "convoy-2", Type: "convoy", Metadata: map[string]string{"gc.drain_member_id": "member-2"}}); got != "convoy-2" {
 		t.Fatalf("graphWorktreeOwnerID fallback = %q, want convoy-2", got)
+	}
+
+	if got := graphWorktreeOwnerID(beads.Bead{ID: "task-1", Type: "task", Metadata: map[string]string{"gc.drain_member_id": "member-1"}}); got != "task-1" {
+		t.Fatalf("graphWorktreeOwnerID non-convoy fallback = %q, want task-1", got)
 	}
 }
 
 func TestExecuteMemGraphWorkerBeadWritesWorkDirToDrainMemberOwner(t *testing.T) {
 	store := beads.NewMemStore()
-	source, err := store.Create(beads.Bead{Title: "source", Type: "task"})
+	source, err := store.Create(beads.Bead{
+		Title: "source",
+		Type:  "convoy",
+		Metadata: map[string]string{
+			"gc.synthetic_kind": "drain-unit-convoy",
+		},
+	})
 	if err != nil {
 		t.Fatalf("Create source: %v", err)
 	}
