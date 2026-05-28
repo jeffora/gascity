@@ -36,6 +36,9 @@ type Record struct {
 	Type      string // "task" | "message" | "session" | "step" | ...
 	Priority  int
 	CreatedAt time.Time
+	// UpdatedAt is the last mutation time. Zero means the record has not
+	// changed since CreatedAt.
+	UpdatedAt time.Time
 	Assignee  string
 	ParentID  string
 	Labels    []string
@@ -238,4 +241,15 @@ func IsNotFound(err error) bool {
 	var errNotFound errNotFound
 	ok := errors.As(err, &errNotFound)
 	return ok
+}
+
+// IsTerminalStatus reports whether status represents a completed lifecycle
+// state that can be removed by retention once it is older than the cutoff.
+func IsTerminalStatus(status string) bool {
+	switch status {
+	case "closed", "canceled", "expired":
+		return true
+	default:
+		return false
+	}
 }

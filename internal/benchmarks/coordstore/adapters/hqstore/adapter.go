@@ -183,6 +183,52 @@ func (a *Adapter) PurgeExpired(context.Context) (int, error) {
 	return a.store.PurgeExpired()
 }
 
+// PurgeTerminal removes old terminal main-tier records.
+func (a *Adapter) PurgeTerminal(_ context.Context, olderThan time.Duration) (int, error) {
+	return purgeTerminal(a.store, olderThan)
+}
+
+type terminalPurgeStore interface {
+	List(beads.ListQuery) ([]beads.Bead, error)
+	Delete(id string) error
+}
+
+func purgeTerminal(store terminalPurgeStore, olderThan time.Duration) (int, error) {
+	if olderThan <= 0 {
+		return 0, nil
+	}
+	cutoff := time.Now().Add(-olderThan)
+	items, err := store.List(beads.ListQuery{
+		AllowScan:     true,
+		IncludeClosed: true,
+		Live:          true,
+		UpdatedBefore: cutoff,
+		TierMode:      beads.TierIssues,
+	})
+	if err != nil {
+		return 0, err
+	}
+	purged := 0
+	for _, item := range items {
+		if !coordstore.IsTerminalStatus(item.Status) || !beadUpdatedBefore(item, cutoff) {
+			continue
+		}
+		if err := store.Delete(item.ID); err != nil {
+			return purged, mapNotFound(err)
+		}
+		purged++
+	}
+	return purged, nil
+}
+
+func beadUpdatedBefore(item beads.Bead, cutoff time.Time) bool {
+	updatedAt := item.UpdatedAt
+	if updatedAt.IsZero() {
+		updatedAt = item.CreatedAt
+	}
+	return updatedAt.Before(cutoff)
+}
+
 // PrimeScan loads open records through the HQStore list path.
 func (a *Adapter) PrimeScan(context.Context) (int, error) {
 	items, err := a.store.List(beads.ListQuery{AllowScan: true})
@@ -234,6 +280,7 @@ func recordToBead(r coordstore.Record) beads.Bead {
 		Type:      r.Type,
 		Priority:  priority,
 		CreatedAt: r.CreatedAt,
+		UpdatedAt: r.UpdatedAt,
 		Assignee:  r.Assignee,
 		ParentID:  r.ParentID,
 		Labels:    r.Labels,
@@ -254,6 +301,7 @@ func beadToRecord(b beads.Bead) coordstore.Record {
 		Type:      b.Type,
 		Priority:  priority,
 		CreatedAt: b.CreatedAt,
+		UpdatedAt: b.UpdatedAt,
 		Assignee:  b.Assignee,
 		ParentID:  b.ParentID,
 		Labels:    b.Labels,
