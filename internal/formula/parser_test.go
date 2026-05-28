@@ -2889,6 +2889,34 @@ type = "workflow"
 	}
 }
 
+func TestParseFileStopsWhenSourcePathResolutionFails(t *testing.T) {
+	dir := t.TempDir()
+	packRoot := filepath.Join(dir, "pack")
+	formulasDir := filepath.Join(packRoot, "formulas")
+	if err := os.MkdirAll(formulasDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(formulas): %v", err)
+	}
+	sourcePath := filepath.Join(formulasDir, "work.toml")
+	if err := os.Symlink(filepath.Join(dir, "missing", "work.toml"), sourcePath); err != nil {
+		t.Skipf("symlink unsupported: %v", err)
+	}
+
+	parser := NewParser()
+	formula, err := parser.ParseFile(sourcePath)
+	if err == nil {
+		t.Fatal("ParseFile succeeded, want source path resolution error")
+	}
+	if formula != nil {
+		t.Fatalf("ParseFile formula = %#v, want nil on source path resolution error", formula)
+	}
+	if !strings.Contains(err.Error(), "resolve formula source path") {
+		t.Fatalf("ParseFile error = %v, want source path context", err)
+	}
+	if !strings.Contains(err.Error(), sourcePath) {
+		t.Fatalf("ParseFile error = %v, want original path %q", err, sourcePath)
+	}
+}
+
 func TestResolvePreservesInheritedStepSourceProvenance(t *testing.T) {
 	dir := t.TempDir()
 	formulasDir := filepath.Join(dir, "formulas")

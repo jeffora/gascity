@@ -1,6 +1,7 @@
 package formula
 
 import (
+	"fmt"
 	"path/filepath"
 	"strings"
 )
@@ -11,18 +12,19 @@ const (
 	PackRootIntrinsic = "pack_root"
 )
 
-// ResolveSourcePath returns a symlink-resolved absolute path when possible.
-// If symlink resolution fails, the original path is returned.
-func ResolveSourcePath(path string) string {
+// ResolveSourcePath returns a symlink-resolved absolute path.
+// If symlink resolution fails, it returns a contextual error instead of an
+// unresolved path.
+func ResolveSourcePath(path string) (string, error) {
 	path = strings.TrimSpace(path)
 	if path == "" {
-		return ""
+		return "", nil
 	}
 	resolved, err := filepath.EvalSymlinks(path)
 	if err != nil {
-		return path
+		return "", fmt.Errorf("resolve formula source path %q: %w", path, err)
 	}
-	return resolved
+	return resolved, nil
 }
 
 // PackRootForFormulaSource derives the pack root from a resolved formula source

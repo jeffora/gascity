@@ -499,6 +499,120 @@ func TestExecuteMemGraphWorkerBeadWritesWorkDirToDrainMemberOwner(t *testing.T) 
 	}
 }
 
+func TestExecuteMemGraphWorkerBeadWritesWorkDirToConvoyOwnerOutsideDrainUnit(t *testing.T) {
+	store := beads.NewMemStore()
+	source, err := store.Create(beads.Bead{
+		Title: "source",
+		Type:  "convoy",
+		Metadata: map[string]string{
+			"gc.synthetic_kind": "something-else",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create source: %v", err)
+	}
+	member, err := store.Create(beads.Bead{Title: "member", Type: "task"})
+	if err != nil {
+		t.Fatalf("Create member: %v", err)
+	}
+	if err := store.SetMetadata(source.ID, "gc.drain_member_id", member.ID); err != nil {
+		t.Fatalf("SetMetadata(gc.drain_member_id): %v", err)
+	}
+
+	step, err := store.Create(beads.Bead{
+		Title: "step-setup",
+		Metadata: map[string]string{
+			"gc.step_ref": "mol-do-work.workspace-setup",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create step: %v", err)
+	}
+	cityPath := t.TempDir()
+	executeMemGraphWorkerBead(t, store, step, source.ID, graphWorktreeOwnerID(mustGetMemBead(t, store, source.ID)), cityPath, "success")
+
+	sourceBead := mustGetMemBead(t, store, source.ID)
+	if got := sourceBead.Metadata["work_dir"]; got != filepath.Join(cityPath, "worktrees", source.ID) {
+		t.Fatalf("source work_dir = %q, want %q", got, filepath.Join(cityPath, "worktrees", source.ID))
+	}
+	memberBead := mustGetMemBead(t, store, member.ID)
+	if got := memberBead.Metadata["work_dir"]; got != "" {
+		t.Fatalf("member work_dir = %q, want empty", got)
+	}
+}
+
+func TestExecuteMemGraphWorkerBeadUsesDrainMemberOwnerWorkDirForImplementAndCleanup(t *testing.T) {
+	store := beads.NewMemStore()
+	source, err := store.Create(beads.Bead{
+		Title: "source",
+		Type:  "convoy",
+		Metadata: map[string]string{
+			"gc.synthetic_kind": "drain-unit-convoy",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create source: %v", err)
+	}
+	owner, err := store.Create(beads.Bead{Title: "owner", Type: "task"})
+	if err != nil {
+		t.Fatalf("Create owner: %v", err)
+	}
+	if err := store.SetMetadata(source.ID, "gc.drain_member_id", owner.ID); err != nil {
+		t.Fatalf("SetMetadata(gc.drain_member_id): %v", err)
+	}
+
+	cityPath := t.TempDir()
+	setupStep, err := store.Create(beads.Bead{
+		Title: "step-setup",
+		Metadata: map[string]string{
+			"gc.step_ref": "mol-do-work.workspace-setup",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create setup step: %v", err)
+	}
+	executeMemGraphWorkerBead(t, store, setupStep, source.ID, graphWorktreeOwnerID(mustGetMemBead(t, store, source.ID)), cityPath, "success")
+
+	implementStep, err := store.Create(beads.Bead{
+		Title: "step-implement",
+		Metadata: map[string]string{
+			"gc.step_ref": "mol-do-work.implement",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create implement step: %v", err)
+	}
+	executeMemGraphWorkerBead(t, store, implementStep, source.ID, graphWorktreeOwnerID(mustGetMemBead(t, store, source.ID)), cityPath, "success")
+
+	ownerBead := mustGetMemBead(t, store, owner.ID)
+	workDir := filepath.Join(cityPath, "worktrees", owner.ID)
+	if got := ownerBead.Metadata["work_dir"]; got != workDir {
+		t.Fatalf("owner work_dir = %q, want %q", got, workDir)
+	}
+	if _, err := os.Stat(filepath.Join(workDir, "implemented.txt")); err != nil {
+		t.Fatalf("implemented.txt not written in owner worktree: %v", err)
+	}
+
+	cleanupStep, err := store.Create(beads.Bead{
+		Title: "step-cleanup",
+		Metadata: map[string]string{
+			"gc.step_ref": "mol-do-work.cleanup-worktree",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create cleanup step: %v", err)
+	}
+	executeMemGraphWorkerBead(t, store, cleanupStep, source.ID, graphWorktreeOwnerID(mustGetMemBead(t, store, source.ID)), cityPath, "success")
+
+	if _, err := os.Stat(workDir); !os.IsNotExist(err) {
+		t.Fatalf("worktree path %s should be removed, stat err=%v", workDir, err)
+	}
+	ownerBead = mustGetMemBead(t, store, owner.ID)
+	if got := ownerBead.Metadata["work_dir"]; got != "" {
+		t.Fatalf("owner work_dir after cleanup = %q, want empty", got)
+	}
+}
+
 func TestGraphWorkflowInMemoryRouteUsesControlDispatcherForControlBeads(t *testing.T) {
 	store, _, workflowID := startMemScopedWorkflow(t)
 

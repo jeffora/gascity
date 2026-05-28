@@ -35,6 +35,32 @@ func TestPackRootForFormulaSourceReportsFalseWithoutFormulasAncestor(t *testing.
 	}
 }
 
+func TestResolveSourcePathReportsSymlinkResolutionErrors(t *testing.T) {
+	dir := t.TempDir()
+	formulasDir := filepath.Join(dir, "formulas")
+	if err := os.MkdirAll(formulasDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(formulas): %v", err)
+	}
+	sourcePath := filepath.Join(formulasDir, "work.toml")
+	if err := os.Symlink(filepath.Join(dir, "missing", "work.toml"), sourcePath); err != nil {
+		t.Skipf("symlink unsupported: %v", err)
+	}
+
+	resolved, err := ResolveSourcePath(sourcePath)
+	if err == nil {
+		t.Fatal("ResolveSourcePath succeeded, want symlink resolution error")
+	}
+	if resolved != "" {
+		t.Fatalf("ResolveSourcePath path = %q, want empty on error", resolved)
+	}
+	if !strings.Contains(err.Error(), "resolve formula source path") {
+		t.Fatalf("ResolveSourcePath error = %v, want source path context", err)
+	}
+	if !strings.Contains(err.Error(), sourcePath) {
+		t.Fatalf("ResolveSourcePath error = %v, want original path %q", err, sourcePath)
+	}
+}
+
 func TestCompileExpandedTemplateStepCarriesTemplatePackRoot(t *testing.T) {
 	dir := t.TempDir()
 	packRoot := filepath.Join(dir, "pack")

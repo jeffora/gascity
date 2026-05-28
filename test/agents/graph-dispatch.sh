@@ -72,6 +72,34 @@ trim_spaces() {
     printf '%s' "$1" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//'
 }
 
+graph_worktree_owner_id() {
+    local source_json="$1"
+    local source_type synthetic_kind owner_id
+
+    source_type=$(printf '%s\n' "$source_json" | json_payload | jq_bead '.type // ""')
+    synthetic_kind=$(printf '%s\n' "$source_json" | json_payload | jq_bead '.metadata["gc.synthetic_kind"] // ""')
+
+    if [ "$source_type" = "convoy" ] && [ "$synthetic_kind" = "drain-unit-convoy" ]; then
+        owner_id=$(printf '%s\n' "$source_json" | json_payload | jq_bead '.metadata["gc.drain_member_id"] // ""')
+        if [ -n "$owner_id" ]; then
+            printf '%s' "$owner_id"
+            return 0
+        fi
+    fi
+
+    owner_id=$(printf '%s\n' "$source_json" | json_payload | jq_bead '.id // ""')
+    if [ -n "$owner_id" ]; then
+        printf '%s' "$owner_id"
+        return 0
+    fi
+
+    owner_id=$(printf '%s\n' "$source_json" | json_payload | jq_bead '.metadata["gc.drain_member_id"] // ""')
+    if [ -n "$owner_id" ]; then
+        printf '%s' "$owner_id"
+        return 0
+    fi
+}
+
 ref_matches_suffix_list() {
     local ref="$1"
     local suffix_list="$2"
@@ -398,6 +426,7 @@ while true; do
     source_id=""
     work_dir=""
     worktree_owner_id=""
+    worktree_owner_json=""
     if [ -n "$root_id" ]; then
         if ! root_json=$(timeout 10 bd show --json "$root_id" 2>/dev/null); then
             trace "root-show-failed bead=$bead_id root=$root_id"
@@ -412,11 +441,16 @@ while true; do
             sleep 1
             continue
         fi
-        work_dir=$(printf '%s\n' "$source_json" | json_payload | jq_bead '.metadata.work_dir')
-        worktree_owner_id=$(printf '%s\n' "$source_json" | json_payload | jq_bead '.metadata["gc.drain_member_id"] // .id')
-        if [ -z "$worktree_owner_id" ]; then
-            worktree_owner_id="$source_id"
+        worktree_owner_id=$(graph_worktree_owner_id "$source_json")
+        worktree_owner_json="$source_json"
+        if [ -n "$worktree_owner_id" ] && [ "$worktree_owner_id" != "$source_id" ]; then
+            if ! worktree_owner_json=$(timeout 10 bd show --json "$worktree_owner_id" 2>/dev/null); then
+                trace "owner-show-failed bead=$bead_id owner=$worktree_owner_id source=$source_id"
+                sleep 1
+                continue
+            fi
         fi
+        work_dir=$(printf '%s\n' "$worktree_owner_json" | json_payload | jq_bead '.metadata.work_dir')
     fi
 
     if is_currently_blocked "$bead_id" "$root_id"; then

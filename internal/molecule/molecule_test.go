@@ -383,6 +383,71 @@ func TestInstantiateSubstitutesStepPackRootInMaterializedFields(t *testing.T) {
 	}
 }
 
+func TestCookImportedFormulaSymlinkResolvesPackRootInWorkerDescription(t *testing.T) {
+	dir := t.TempDir()
+	packRoot := filepath.Join(dir, "packs", "triage-pack")
+	formulasDir := filepath.Join(packRoot, "formulas")
+	assetsDir := filepath.Join(packRoot, "assets", "scripts")
+	if err := os.MkdirAll(formulasDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(formulas): %v", err)
+	}
+	if err := os.MkdirAll(assetsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(assets): %v", err)
+	}
+	checkPath := filepath.Join(assetsDir, "check.sh")
+	if err := os.WriteFile(checkPath, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("WriteFile(check.sh): %v", err)
+	}
+
+	formulaPath := filepath.Join(formulasDir, "github-issue-triage.formula.toml")
+	toml := `
+formula = "github-issue-triage"
+version = 1
+type = "workflow"
+
+[[steps]]
+id = "run-check"
+title = "Run imported pack check"
+description = "Execute {{pack_root}}/assets/scripts/check.sh before closing."
+`
+	if err := os.WriteFile(formulaPath, []byte(strings.TrimSpace(toml)+"\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(formula): %v", err)
+	}
+
+	importedFormulasDir := filepath.Join(dir, "city", ".beads", "formulas")
+	if err := os.MkdirAll(importedFormulasDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(imported formulas): %v", err)
+	}
+	linkedFormulaPath := filepath.Join(importedFormulasDir, "github-issue-triage.formula.toml")
+	if err := os.Symlink(formulaPath, linkedFormulaPath); err != nil {
+		t.Skipf("symlink unsupported: %v", err)
+	}
+
+	store := beads.NewMemStore()
+	result, err := Cook(context.Background(), store, "github-issue-triage", []string{importedFormulasDir}, Options{})
+	if err != nil {
+		t.Fatalf("Cook: %v", err)
+	}
+
+	stepID := result.IDMapping["github-issue-triage.run-check"]
+	if stepID == "" {
+		t.Fatal("run-check bead not created")
+	}
+	step, err := store.Get(stepID)
+	if err != nil {
+		t.Fatalf("Get(%q): %v", stepID, err)
+	}
+	if got, want := step.Description, "Execute "+checkPath+" before closing."; got != want {
+		t.Fatalf("step description = %q, want %q", got, want)
+	}
+	if strings.Contains(step.Description, "{{pack_root}}") {
+		t.Fatalf("step description still contains pack_root placeholder: %q", step.Description)
+	}
+	if strings.Contains(step.Description, linkedFormulaPath) || strings.Contains(step.Description, importedFormulasDir) {
+		t.Fatalf("step description used symlink provenance instead of resolved pack root: %q", step.Description)
+	}
+}
+
 func TestInstantiateRejectsPackRootWithoutProvenanceBeforeCreatingBeads(t *testing.T) {
 	sourcePath := filepath.Join(t.TempDir(), "workflow.toml")
 	recipe := &formula.Recipe{

@@ -136,7 +136,6 @@ esac
 func TestAdoptPRFormulaCompileAndRun(t *testing.T) {
 	cityDir := setupReviewFormulaCity(t, "success", nil)
 	issueID, workflowID := startReviewWorkflow(t, cityDir, "mol-adopt-pr-v2", map[string]string{
-		"issue":       "", // filled after create
 		"pr_ref":      "refs/heads/test",
 		"base_branch": "main",
 		"skip_gemini": "false",
@@ -176,7 +175,6 @@ func TestAdoptPRFormulaCompileAndRun(t *testing.T) {
 func TestPersonalWorkFormulaCompileAndRun(t *testing.T) {
 	cityDir := setupReviewFormulaCity(t, "success", nil)
 	issueID, workflowID := startReviewWorkflow(t, cityDir, "mol-personal-work-v2", map[string]string{
-		"issue":         "", // filled after create
 		"base_branch":   "main",
 		"skip_gemini":   "true",
 		"setup_command": "true",
@@ -217,7 +215,6 @@ func TestAdoptPRFormulaRetriesTransientReviewerStep(t *testing.T) {
 		"GC_GRAPH_TRANSIENT_ONCE_SUFFIXES": "review-loop.iteration.1.review-pipeline.review-codex.attempt.1",
 	})
 	_, workflowID := startReviewWorkflow(t, cityDir, "mol-adopt-pr-v2", map[string]string{
-		"issue":       "",
 		"pr_ref":      "refs/heads/test",
 		"base_branch": "main",
 		"skip_gemini": "false",
@@ -253,7 +250,6 @@ func TestAdoptPRFormulaSoftFailsGeminiAfterTransientRetries(t *testing.T) {
 		}, ","),
 	})
 	_, workflowID := startReviewWorkflow(t, cityDir, "mol-adopt-pr-v2", map[string]string{
-		"issue":       "",
 		"pr_ref":      "refs/heads/test",
 		"base_branch": "main",
 		"skip_gemini": "false",
@@ -313,9 +309,7 @@ max_attempts = 3
 on_exhausted = "hard_fail"
 `)
 
-	_, workflowID := startReviewWorkflow(t, cityDir, "mol-retry-recovery-smoke", map[string]string{
-		"issue": "",
-	})
+	_, workflowID := startReviewWorkflow(t, cityDir, "mol-retry-recovery-smoke", map[string]string{})
 
 	workflow := waitForBeadClosed(t, cityDir, workflowID, 4*time.Minute)
 	if got := metaValue(workflow, "gc.outcome"); got != "pass" {
@@ -460,9 +454,6 @@ func startReviewWorkflow(t *testing.T, cityDir, formula string, vars map[string]
 		t.Fatalf("unmarshal: %v\njson: %s", err, out)
 	}
 	issueID := created.ID
-
-	// Set issue var to the created bead ID.
-	vars["issue"] = issueID
 
 	args := []string{"sling", "worker", issueID, "--on=" + formula}
 	for k, v := range vars {

@@ -159,7 +159,7 @@ func TestOpenSourceWorkflowStoresFailsOnlyWhenEverythingBroken(t *testing.T) {
 	}
 }
 
-func TestWorkflowFinalizeRetriesWhenSourceWorkflowStoreScanSkipsLiveRoot(t *testing.T) {
+func TestWorkflowFinalizeGraphV2ClosesOwnedAnchorWithoutScanningLiveRoots(t *testing.T) {
 	cityPath := "/city"
 	cfg := &config.City{
 		Workspace: config.Workspace{Name: "test-city"},
@@ -272,40 +272,37 @@ func TestWorkflowFinalizeRetriesWhenSourceWorkflowStoreScanSkipsLiveRoot(t *test
 		SourceWorkflowStores: makeSourceWorkflowStoresListerWithOpenStore(cityPath, cfg, openStore),
 		SourceWorkflowLock:   func(_ string, _ string, fn func() error) error { return fn() },
 	})
-	if err == nil {
-		t.Fatal("ProcessControl(workflow-finalize) err = nil, want retryable skipped-store error")
-	}
-	if !strings.Contains(err.Error(), "source-workflow singleton scan skipped") {
-		t.Fatalf("ProcessControl error = %v, want skipped-store scan error", err)
+	if err != nil {
+		t.Fatalf("ProcessControl(workflow-finalize): %v", err)
 	}
 
 	workflowAfter, err := rigStore.Get(workflow.ID)
 	if err != nil {
 		t.Fatalf("Get(workflow): %v", err)
 	}
-	if workflowAfter.Status == "closed" {
-		t.Fatal("workflow status = closed; want open so singleton scans still see the retrying root")
+	if workflowAfter.Status != "closed" {
+		t.Fatalf("workflow status = %q; want closed after successful finalize", workflowAfter.Status)
 	}
 	finalizerAfter, err := rigStore.Get(finalizer.ID)
 	if err != nil {
 		t.Fatalf("Get(finalizer): %v", err)
 	}
-	if finalizerAfter.Status == "closed" {
-		t.Fatal("finalizer status = closed; want open so source-chain closure retries after skipped scan")
+	if finalizerAfter.Status != "closed" {
+		t.Fatalf("finalizer status = %q; want closed after successful finalize", finalizerAfter.Status)
 	}
 	rigLaunchAfter, err := rigStore.Get(rigLaunch.ID)
 	if err != nil {
 		t.Fatalf("Get(rig launch): %v", err)
 	}
-	if rigLaunchAfter.Status == "closed" {
-		t.Fatal("rig launch status = closed; want open until all source-workflow stores are scanned")
+	if rigLaunchAfter.Status != "closed" {
+		t.Fatalf("rig launch status = %q; want closed because the owned source anchor finalizes", rigLaunchAfter.Status)
 	}
 	citySourceAfter, err := cityStore.Get(citySource.ID)
 	if err != nil {
 		t.Fatalf("Get(city source): %v", err)
 	}
 	if citySourceAfter.Status == "closed" {
-		t.Fatal("city source status = closed; want open while a skipped store may contain a live root")
+		t.Fatal("city source status = closed; want open because graph.v2 finalization only closes the owned anchor")
 	}
 	hiddenRootAfter, err := brokenStore.Get(hiddenRoot.ID)
 	if err != nil {
