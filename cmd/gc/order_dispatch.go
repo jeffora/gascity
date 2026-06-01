@@ -1411,10 +1411,7 @@ func storeHasOpenDescendants(store beads.Store, parentID string) (bool, error) {
 		parentID := queue[0]
 		queue = queue[1:]
 
-		children, err := reader.List(beads.ListQuery{
-			ParentID:      parentID,
-			IncludeClosed: true,
-		})
+		children, err := orderWispDescendantChildren(reader, parentID)
 		if err != nil {
 			return false, err
 		}
@@ -1433,6 +1430,72 @@ func storeHasOpenDescendants(store beads.Store, parentID string) (bool, error) {
 		}
 	}
 	return false, nil
+}
+
+func orderWispDescendantChildren(reader beads.LiveReader, parentID string) ([]beads.Bead, error) {
+	children, err := reader.List(beads.ListQuery{
+		ParentID:      parentID,
+		IncludeClosed: true,
+	})
+	if err != nil {
+		return nil, err
+	}
+	parent, err := reader.Get(parentID)
+	if errors.Is(err, beads.ErrNotFound) {
+		return children, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("getting graph parent %s: %w", parentID, err)
+	}
+	if !orderWispMayHaveGraphDependents(parent) {
+		return children, nil
+	}
+	deps, err := reader.DepList(parentID, "up")
+	if err != nil {
+		return nil, fmt.Errorf("listing graph dependents for %s: %w", parentID, err)
+	}
+	for _, dep := range deps {
+		if dep.IssueID == "" || dep.DependsOnID != parentID {
+			continue
+		}
+		if !isOrderWispDescendantDepType(dep.Type) {
+			continue
+		}
+		child, err := reader.Get(dep.IssueID)
+		if errors.Is(err, beads.ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("getting graph dependent %s: %w", dep.IssueID, err)
+		}
+		children = append(children, child)
+	}
+	return children, nil
+}
+
+func orderWispMayHaveGraphDependents(bead beads.Bead) bool {
+	if isOrderWispRootCandidate(bead) {
+		return true
+	}
+	if bead.Metadata["gc.root_bead_id"] != "" {
+		return true
+	}
+	if bead.Metadata["gc.step_ref"] != "" {
+		return true
+	}
+	if bead.Metadata["gc.logical_bead_id"] != "" {
+		return true
+	}
+	return false
+}
+
+func isOrderWispDescendantDepType(depType string) bool {
+	switch depType {
+	case "parent-child", "tracks", "blocks":
+		return true
+	default:
+		return false
+	}
 }
 
 func (m *memoryOrderDispatcher) hasOpenWorkInStoresStrict(stores []beads.Store, scopedName string) (bool, error) {
@@ -1744,10 +1807,7 @@ func collectOrderWispSubtree(store beads.Store, root beads.Bead) ([]beads.Bead, 
 		parentID := queue[0]
 		queue = queue[1:]
 
-		children, err := reader.List(beads.ListQuery{
-			ParentID:      parentID,
-			IncludeClosed: true,
-		})
+		children, err := orderWispDescendantChildren(reader, parentID)
 		if err != nil {
 			return nil, err
 		}
