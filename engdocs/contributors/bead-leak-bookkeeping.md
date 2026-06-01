@@ -94,11 +94,13 @@ decorators no longer persist `gc.run_target` on new workflow roots; they stamp
 only the canonical `gc.routed_to` delivery key.
 Live legacy roots were backfilled on 2026-06-01T10:58:02Z by grouping exact
 `ga.wisps` workflow-root IDs through the `gc ... bd update` wrapper with
-`--set-metadata gc.routed_to=<run_target>`. The repair covered 139 `ga` roots
-that still had `gc.run_target` with empty `gc.routed_to` (129 closed, 6 in
-progress, 4 open). Post-repair SQL found `0` matching rows in both `ga.wisps`
-and `mc.wisps`, including `0` open or in-progress workflow roots missing the
-canonical delivery key.
+`--set-metadata gc.routed_to=<run_target>`. The first repair covered 139 `ga`
+roots that still had `gc.run_target` with empty `gc.routed_to` (129 closed, 6
+in progress, 4 open). A follow-up all-database scan on 2026-06-01T11:13:41Z
+found 13 more legacy roots in configured rig or legacy stores (`bd=2`, `gp=1`,
+`gt=5`, `my_db=5`); those were backfilled as well. Post-repair SQL across
+`bd`, `ga`, `gg`, `gp`, `gt`, `mc`, `my_db`, and `rig` found `0` workflow
+roots with `gc.run_target` and missing `gc.routed_to`.
 
 `TestGastownIdleOpenBeadCountsStayBounded` now runs in Tier B nightly
 acceptance. `.github/workflows/nightly.yml` schedules the Tier B job daily at
@@ -192,10 +194,11 @@ Dolt log. Unverified legacy markers still stop before any force-push.
 - `go test ./cmd/gc -run 'Test(BatchOnGraphWorkflowStartsWorkflowWithoutRoutingChild|DefaultScaleCheckCountsIgnoresRunTargetOnlyPersistedWork|DefaultScaleCheckCountsAndNamedDemandIgnoresRunTargetOnlyReadyWork|FilterAssignedWorkBeadsForPoolDemandIgnoresRunTargetOnlyWork|StoreForPoolAssignment_IgnoresRunTargetForStoreRouting|ComputePoolDesiredStates_IgnoresRunTargetOnlyWakeDemand|RunTargetRoutedToBackfillCheck|InstantiateSlingFormulaGraphWorkflowPreservesRoutedTo|DoctorCheckNamesGolden|CmdHookIgnoresRunTargetOnlyRoot)$' -count=1`
   passed for the sling-side route stamping, doctor backfill path, hook
   boundary, and routed_to-only runtime reader cleanup.
-- Live route-key verification on 2026-06-01T10:58:02Z found no `ga` or `mc`
-  workflow roots with `gc.run_target` and missing `gc.routed_to` after the
-  scoped backfill. Before repair, `ga` had `139` such roots (`129` closed, `6`
-  in progress, `4` open); `mc` had `0`.
+- Live route-key verification on 2026-06-01T11:13:41Z found `0` workflow roots
+  with `gc.run_target` and missing `gc.routed_to` across `bd`, `ga`, `gg`,
+  `gp`, `gt`, `mc`, `my_db`, and `rig`. Before repair, `ga` had `139` such
+  roots (`129` closed, `6` in progress, `4` open), and the later all-database
+  scan found `bd=2`, `gp=1`, `gt=5`, and `my_db=5`.
 - `go test ./internal/api -run TestWorkflowProjectionTargetIgnoresRunTarget -count=1`
   passed for workflow-run API projection using the canonical delivery key.
 - `go test ./internal/api -count=1` passed after updating order-feed workflow
@@ -263,11 +266,13 @@ Dolt log. Unverified legacy markers still stop before any force-push.
   an idle-city leak.
 - Live route-key inspection and repair at 2026-06-01T10:58:02Z found `139`
   `ga.wisps` workflow roots with `gc.run_target` and missing `gc.routed_to`:
-  `129` closed, `6` in progress, and `4` open. `mc.wisps` had `0`. The exact
-  `ga` rows were repaired through the `gc ... bd update` wrapper with
-  `--set-metadata gc.routed_to=<run_target>`. Post-repair SQL found `0`
-  matching rows across both `ga` and `mc`, including `0` open or in-progress
-  workflow roots missing `gc.routed_to`.
+  `129` closed, `6` in progress, and `4` open. A later all-database scan at
+  2026-06-01T11:13:41Z found 13 more legacy roots outside `ga`/`mc`: `bd=2`,
+  `gp=1`, `gt=5`, and `my_db=5`. Registered rig stores were repaired through
+  the `gc ... bd update` wrapper with
+  `--set-metadata gc.routed_to=<run_target>`; the legacy `my_db` rows were
+  repaired with the same scoped SQL predicate. Post-repair SQL found `0`
+  matching rows across `bd`, `ga`, `gg`, `gp`, `gt`, `mc`, `my_db`, and `rig`.
 - Branch reaper dry-run on the same live server after the stale-only alert
   patch reported `stale_wisps:115`, `mail_wisps:134`, `would_close_wisps:0`,
   and made no escalation mail call with `GC_REAPER_ALERT_THRESHOLD=500`.
