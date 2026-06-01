@@ -14,9 +14,11 @@
 # Running as an exec order gives us direct SQL access via the dolt CLI.
 #
 # Algorithm (flatten mode):
-#   0. Purge Dolt git remote caches. These are rebuildable fetch caches and can
-#      dwarf live table data even when the database is below the flatten
-#      threshold.
+#   0. Purge Dolt git remote caches when no pending remote repair is in
+#      progress. These are rebuildable fetch caches and can dwarf live table
+#      data even when the database is below the flatten threshold, but the
+#      running SQL server may need an existing cache while retrying a pending
+#      fetch/push repair.
 #   1. Pre-flight: record row counts and value hashes for all user tables and
 #      require HEAD to remain stable across a bounded retry loop.
 #   2. Soft-reset to the root commit; all data stays staged.
@@ -1408,15 +1410,19 @@ flatten_database() {
     esac
   fi
 
-  purge_remote_cache "$db" || return 1
   if [ -n "$remote_cache_only" ]; then
+    purge_remote_cache "$db" || return 1
     printf 'compact: db=%s remote_cache_only=1 — skip compaction state checks\n' "$db"
     return 0
   fi
 
   if has_compact_marker "$quarantine_dir" "$db"; then
-    printf 'compact: db=%s integrity quarantine marker exists — manual intervention required before compaction or GC\n' \
-      "$db" >&2
+    purge_remote_cache "$db" || return 1
+    quarantine_marker=$(compact_marker_path "$quarantine_dir" "$db")
+    quarantine_reason=$(compact_marker_value "$quarantine_dir" "$db" reason || true)
+    quarantine_created_at=$(compact_marker_value "$quarantine_dir" "$db" created_at || true)
+    printf 'compact: db=%s integrity quarantine marker exists at %s reason=%s created_at=%s — manual intervention required before compaction or GC\n' \
+      "$db" "$quarantine_marker" "${quarantine_reason:-<unknown>}" "${quarantine_created_at:-<unknown>}" >&2
     return 1
   fi
 
@@ -1556,6 +1562,8 @@ flatten_database() {
     push_remote_after_compaction "$db" "$pending_remote" "$pending_expected_remote_head" "${pending_expected_remote_head_verified:-0}" "retry" "$pending_compacted_from_head" "$pending_local_branch" "$pending_remote_branch"
     return $?
   fi
+
+  purge_remote_cache "$db" || return 1
 
   if ! count=$(commit_count "$db"); then
     return 1
