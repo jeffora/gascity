@@ -210,6 +210,7 @@ still refuses to create arbitrary paths from a malformed error message.
 | Session pool creation in `cmd/gc/build_desired_state.go` and lifecycle paths | Session beads, including generic ephemeral session beads for managed pools. | Session lifecycle/reconciler close or retire sessions. `reaper.sh` prunes closed `gm-*` session beads through `bd prune` and prunes terminal drained session states through `gc session prune`; orphan-sweep preserves live ephemeral session assignees. |
 | `cmd/gc/cmd_wait.go` and `cmd/gc/nudge_beads.go` session wait/nudge queue | Wait beads labeled `gc:wait`; queued nudge beads labeled `gc:nudge`, including wait-delivery nudges. | Waits close through ready delivery, cancel, expire, or failure paths. Nudge dispatch marks terminal state and closes through `markQueuedNudgeTerminal`; session-close and wait-cancel paths withdraw queued wait nudges. |
 | `internal/mail/beadmail` mail provider | Ephemeral message beads for sends and replies. | Mail is user/controller work, not stale non-message workflow debris. Reaper excludes messages from the non-message leak alert and tracks mail backlog through the separate mail-wisp threshold. |
+| `cmd/gc/cmd_handoff.go` auto context handoff | PreCompact hooks call `gc handoff --auto "context cycle"`, opening a self-addressed system message so the compacted session can see the handoff. | Auto-handoff mail is now labeled `gc:auto-handoff` and `gc:archive-after-inject`. `gc mail check --inject` uses the local provider path for hook injection, then archives only messages carrying those labels after successful injection. Ordinary user mail remains open until read/archive/delete. |
 | `internal/extmsg/*_service.go` external-messaging projections | Task-typed mirror beads for transcript entries/state, bindings, memberships, groups, group participants, and delivery context. | These are projection/state rows. Binding, membership, and participant services close superseded or removed rows explicitly; transcript/state rows are retention data and should be bounded by an extmsg-specific retention policy, not generic wisp age cleanup. |
 | `cmd/gc/convergence_store.go` convergence loop | `convergence` beads with `Status=in_progress` for manual convergence loops. | The convergence handler writes terminal metadata and state on approval, stop, or no-convergence. Reconcile paths repair partial/orphaned convergence state; these are not reaper-owned workflow wisps. |
 | Manual/API task and convoy creators in `cmd/gc/cmd_bd_store_bridge.go`, `cmd/gc/cmd_handoff.go`, `cmd/gc/cmd_prompt.go`, `cmd/gc/cmd_sling.go`, `cmd/gc/cmd_convoy.go`, `internal/convoy/convoy.go`, `internal/api/huma_handlers_beads.go`, and `internal/api/huma_handlers_convoys.go` | User-visible issue-tier tasks, prompt-synthesis tasks, handoff tasks, auto-convoys, and explicit convoys, often with `tracks` dependencies. | User/controller workflow owns closure. These are not age-reaped unless they are wisp-tier stale closure candidates; convoy `check`/`autoclose` handles owned convoys whose tracked work is terminal. |
@@ -232,6 +233,7 @@ session aliases already covered by the session row (`adoption_barrier`,
 | `cmd/gc/order_dispatch.go` | Close order-tracking beads after dispatch attempt completion. | Existing defer is the primary owner; stale tracking-bead bugs should be treated as order-dispatch defects. |
 | `cmd/gc/cmd_order.go` / `cmd/gc/order_dispatch.go` order-tracking sweeps | Close orphaned or stale `gc:order-tracking` beads and stale order wisp subtrees. | Runs from the built-in `order-tracking-sweep` order and manual `gc order tracking sweep`; close reasons are stamped before close so stale/order-orphan cleanup is observable. |
 | `cmd/gc/cmd_wait.go`, `cmd/gc/cmd_nudge.go`, and `internal/session/waits.go` | Close terminal wait beads and queued nudge beads. | Wait set/cancel/delivery/expiry paths call `setWaitTerminalState` and close the wait bead. Nudge terminal paths stamp `terminal_reason`, `commit_boundary`, and `terminal_at` before close; session close cancels outstanding waits. |
+| `cmd/gc/cmd_mail.go` / `internal/mail/beadmail` auto-handoff injection cleanup | Archive system auto-handoff mail after it has been injected into the next provider hook context. | The inject path deliberately bypasses the supervisor API so the local provider can perform the archive side effect. The beadmail provider checks both system labels before deleting; ordinary injected mail still stays open. |
 | `internal/extmsg/binding_service.go`, `internal/extmsg/group_service.go`, and `internal/extmsg/transcript_service.go` | Close superseded external-message bindings, memberships, and participants. | Projection cleanup is domain-specific: old bindings close on replacement/unbind, memberships close on leave, and group participants close on removal. Transcript entries and transcript state are retained projection history and need explicit retention policy if they ever become a growth source. |
 | `cmd/gc/doctor_run_target_backfill.go` | Mechanical repair for workflow roots with `gc.run_target` but missing `gc.routed_to`. | New `gc doctor --fix` check backfills the canonical claim key without touching non-workflow beads or already-routed roots. |
 | `examples/dolt/commands/compact/run.sh` | Bound Dolt storage by flattening high-commit databases, running full GC, retrying safe pending-push/pending-GC markers, and pruning rebuildable `.dolt/git-remote-cache` directories. | Patched so remote-cache cleanup runs before commit-count skips and before blocking quarantine markers, while preserving the cache during pending remote repair retries; pending-push retry runs local full GC when oldgen archives are present; missing bare remote-cache repos are initialized and fetched once when the path is safely under `.dolt/git-remote-cache`; dry-run reports exact cache and local-GC actions; cache-only mode reclaims cache bloat without retrying pending remote pushes. |
@@ -305,6 +307,13 @@ session aliases already covered by the session row (`adoption_barrier`,
   surfaced.
 - `go test ./cmd/gc -run 'TestRunWorkflowServe' -count=1` passed for the
   broader control-dispatcher serve-loop regression set.
+- `go test ./cmd/gc -run 'Test(MailCheckInjectArchivesAutoHandoffMessages|MailCheckInjectLeavesTruncatedAutoHandoffMessages|RouteMailCheckInjectUsesLocalPathForArchiveSideEffects|CmdHandoffAutoSendsMailWithoutBlocking)$' -count=1`
+  failed before the auto-handoff mail cleanup patch because injected
+  `context cycle` messages stayed open and the routed inject path used the API;
+  it passed after auto-handoff mail was labeled, local inject archived only
+  those labels, ordinary injected mail remained open, and auto-handoff messages
+  beyond the hook output truncation limit remained open until actually
+  injected.
 - Live route-key verification on 2026-06-01T11:13:41Z found `0` workflow roots
   with `gc.run_target` and missing `gc.routed_to` across `bd`, `ga`, `gg`,
   `gp`, `gt`, `mc`, `my_db`, and `rig`. Before repair, `ga` had `139` such
@@ -423,6 +432,11 @@ session aliases already covered by the session row (`adoption_barrier`,
   `mc=795`). Active non-message rows were `ga=597` and `mc=634`, but stale
   non-message rows remained bounded at `ga=13` and `mc=24`; `gt` and `my_db`
   remained at zero active wisps. `mc` still had `161` active mail wisps.
+- Follow-up live mail inspection found `81` open `mc` message wisps titled
+  `context cycle`, all with empty bodies. Those are legacy auto-handoff rows
+  created before the new labels existed. The patch prevents future repeated
+  auto-handoff accumulation by archiving labeled auto-handoff mail after hook
+  injection; it does not age-delete unlabeled legacy context-cycle mail.
 - Dolt compaction remains blocked for `mc` by
   `/data/projects/maintainer-city/.gc/runtime/packs/dolt/compact-quarantine/mc`
   (`post-flatten value hash changed without row-count increase`,
