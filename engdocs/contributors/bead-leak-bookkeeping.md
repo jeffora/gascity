@@ -344,6 +344,21 @@ still refuses to create arbitrary paths from a malformed error message.
   `session=24` older than 24h by `created_at`. This live city is not idle, so
   the raw threshold remains a live backlog acceptance gap rather than proof of
   an idle-city leak.
+- Live re-measurement at 2026-06-01T13:08:59Z: raw `status='open'` wisp counts
+  were still above the literal `ga-k5ds4` closure threshold on the busy live
+  city (`ga=559`, `mc=737`). The stale non-message surface remained bounded
+  (`ga=12`, `mc=24` older than 24h by `created_at`; `gt=0`, `my_db=0`), which
+  continues to support the stale-only reaper alert boundary. This is not enough
+  to close `ga-k5ds4` because its AC explicitly asks for raw open wisps below
+  500 in both `ga` and `mc`.
+- Stale stuck-root follow-up boundary for `ga-k5ds4`: do not add a bare
+  age-only root closer. A safe implementation needs dry-run-first reporting and
+  should close only old workflow/root wisps that have no open non-message
+  dependents, no active hook/assignee evidence, no recent `updated_at`, and no
+  unresolved dependency edge; it should leave mail backlog and active workflow
+  pressure out of the reaper-safe closure set. This remains the path for
+  satisfying the raw-count AC without turning the reaper into a generic
+  age-based work closer.
 - Live route-key inspection and repair at 2026-06-01T10:58:02Z found `139`
   `ga.wisps` workflow roots with `gc.run_target` and missing `gc.routed_to`:
   `129` closed, `6` in progress, and `4` open. A later all-database scan at
