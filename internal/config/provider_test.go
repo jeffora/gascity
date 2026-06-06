@@ -532,7 +532,10 @@ func TestBuiltinProvidersGrokPreset(t *testing.T) {
 	if got := rp.ProviderSessionCreateTransport(); got != "" {
 		t.Fatalf("ProviderSessionCreateTransport() = %q, want \"\" (no ACP)", got)
 	}
-	if got, want := rp.ResolveDefaultArgs(), []string{"--permission-mode", "bypassPermissions"}; !reflect.DeepEqual(got, want) {
+	if p.OptionDefaults["model"] != "grok-build" {
+		t.Errorf("OptionDefaults[model] = %q, want grok-build", p.OptionDefaults["model"])
+	}
+	if got, want := rp.ResolveDefaultArgs(), []string{"--permission-mode", "bypassPermissions", "--model", "grok-build"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("ResolveDefaultArgs() = %v, want %v", got, want)
 	}
 	if got, want := rp.TitleModelFlagArgs(), []string{"--model", "grok-composer-2.5-fast"}; !reflect.DeepEqual(got, want) {
