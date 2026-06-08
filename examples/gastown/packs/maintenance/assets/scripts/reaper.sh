@@ -254,6 +254,42 @@ get_sql_rows() {
     SQL_ROWS_RESULT=$(printf '%s\n' "$output" | tail -n +2 | tr -d '\r')
 }
 
+SQL_ID_LIST_RESULT=""
+SQL_ID_LIST_VALID_COUNT=0
+SQL_ID_LIST_SKIPPED_COUNT=0
+build_sql_id_list() {
+    local rows="$1"
+    local id
+    local list=""
+    local valid_count=0
+    local skipped_count=0
+
+    SQL_ID_LIST_RESULT=""
+    SQL_ID_LIST_VALID_COUNT=0
+    SQL_ID_LIST_SKIPPED_COUNT=0
+
+    while IFS= read -r id; do
+        [ -z "$id" ] && continue
+        case "$id" in
+            *[!a-z0-9-]*)
+                skipped_count=$((skipped_count + 1))
+                continue
+                ;;
+        esac
+        if [ -n "$list" ]; then
+            list="$list, "
+        fi
+        list="$list'${id}'"
+        valid_count=$((valid_count + 1))
+    done <<EOF
+$rows
+EOF
+
+    SQL_ID_LIST_RESULT="$list"
+    SQL_ID_LIST_VALID_COUNT="$valid_count"
+    SQL_ID_LIST_SKIPPED_COUNT="$skipped_count"
+}
+
 has_split_dependency_target_columns() {
     local db="$1"
     local output
@@ -382,26 +418,39 @@ while IFS= read -r DB; do
             break
         fi
 
+        get_sql_rows "$DB" "stale wisp close batch" "
+            SELECT DISTINCT w.id FROM \`$DB\`.wisps w
+            INNER JOIN \`$DB\`.dependencies d
+                ON d.issue_id = w.id
+                AND d.type = 'parent-child'
+            LEFT JOIN \`$DB\`.wisps parent_wisp ON d.depends_on_wisp_id = parent_wisp.id
+            LEFT JOIN \`$DB\`.issues parent_issue ON d.depends_on_issue_id = parent_issue.id
+            WHERE w.status IN ('open', 'hooked', 'in_progress')
+            AND w.created_at < DATE_SUB(NOW(), INTERVAL $MAX_AGE_H HOUR)
+            AND (
+                parent_wisp.status = 'closed'
+                OR parent_issue.status = 'closed'
+            )
+            ORDER BY w.id
+            LIMIT $CLOSE_WISP_BATCH
+        "
+        CLOSE_WISP_IDS=$SQL_ROWS_RESULT
+        build_sql_id_list "$CLOSE_WISP_IDS"
+        if [ "$SQL_ID_LIST_VALID_COUNT" -eq 0 ]; then
+            if [ "$SQL_ID_LIST_SKIPPED_COUNT" -gt 0 ]; then
+                record_anomaly "$DB" "stale wisp close batch for $DB returned only unsafe ids; close skipped"
+            fi
+            break
+        fi
+        if [ "$SQL_ID_LIST_SKIPPED_COUNT" -gt 0 ]; then
+            record_anomaly "$DB" "stale wisp close batch for $DB skipped $SQL_ID_LIST_SKIPPED_COUNT unsafe id(s)"
+        fi
+
         if run_sql_change "$DB" "closing stale wisps" "
             UPDATE \`$DB\`.wisps SET status='closed', closed_at=NOW()
             WHERE status IN ('open', 'hooked', 'in_progress')
             AND created_at < DATE_SUB(NOW(), INTERVAL $MAX_AGE_H HOUR)
-            AND id IN (
-                SELECT id FROM (
-                    SELECT w.id FROM \`$DB\`.wisps w
-                    INNER JOIN \`$DB\`.dependencies d
-                        ON d.issue_id = w.id
-                        AND d.type = 'parent-child'
-                    LEFT JOIN \`$DB\`.wisps parent_wisp ON d.depends_on_wisp_id = parent_wisp.id
-                    LEFT JOIN \`$DB\`.issues parent_issue ON d.depends_on_issue_id = parent_issue.id
-                    WHERE w.status IN ('open', 'hooked', 'in_progress')
-                    AND w.created_at < DATE_SUB(NOW(), INTERVAL $MAX_AGE_H HOUR)
-                    AND (
-                        parent_wisp.status = 'closed'
-                        OR parent_issue.status = 'closed'
-                    )
-                ) reaper_wisp_candidates
-            )
+            AND id IN ($SQL_ID_LIST_RESULT)
         "; then
             CLOSE_WISP_ROWS=$SQL_CHANGE_ROWS_RESULT
             if [ "$CLOSE_WISP_ROWS" -eq 0 ]; then

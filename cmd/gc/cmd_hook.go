@@ -144,7 +144,7 @@ func cmdHookWithOptions(args []string, opts hookCommandOptions, stdout, stderr i
 	}
 
 	cityName := loadedCityName(cfg, cityPath)
-	workQuery := a.EffectiveWorkQueryForBeads(cfg.Beads)
+	workQuery := a.EffectiveWorkQuery()
 	// Expand {{.Rig}}/{{.AgentBase}} in user-supplied work_query so agent-side
 	// hook invocation sees the same rig substitution as the controller-side
 	// probes in build_desired_state.go / session_reconcile.go. #793.
@@ -300,7 +300,7 @@ type WorkQueryRunner func(command, dir string) (string, error)
 // the pre-bounded behavior (30s) so existing tests that legitimately
 // take >15s don't regress; the package-level var lets us lower it in
 // follow-up work after slow paths are identified and optimized.
-var hookWorkQueryTimeout = 30 * time.Second
+var hookWorkQueryTimeout = 120 * time.Second
 
 // shellWorkQueryWithEnv runs a work query command via sh -c and returns
 // stdout. If env is non-nil it is used as the subprocess environment

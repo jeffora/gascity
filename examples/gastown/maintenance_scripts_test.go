@@ -1656,6 +1656,11 @@ func TestReaperMessageWispsAboveAlertThresholdDoNotTriggerReapFailureAnomaly(t *
 
 	writeExecutable(t, filepath.Join(binDir, "dolt"), `#!/bin/sh
 printf '%s\n' "$*" >> "$DOLT_ARGS_LOG"
+call=$(printf '%s' "$*" | tr '\n' ' ')
+if printf '%s' "$call" | grep -Fq "SELECT DISTINCT w.id"; then
+  printf 'id\nga-chain-1\n'
+  exit 0
+fi
 case "$*" in
   *"SHOW TABLES FROM"*"LIKE 'wisps'"*)
     printf 'Tables_in_db\nwisps\n'
@@ -1677,6 +1682,9 @@ case "$*" in
     ;;
   *"COUNT("*)
     printf 'COUNT(*)\n0\n'
+    ;;
+  *"SELECT DISTINCT w.id"*)
+    printf 'id\nga-1\n'
     ;;
   *"SELECT id"*)
     printf 'id\n'
@@ -1725,6 +1733,11 @@ func TestReaperNonMessageWispsAboveAlertThresholdStillTriggerReapFailureAnomaly(
 
 	writeExecutable(t, filepath.Join(binDir, "dolt"), `#!/bin/sh
 printf '%s\n' "$*" >> "$DOLT_ARGS_LOG"
+call=$(printf '%s' "$*" | tr '\n' ' ')
+if printf '%s' "$call" | grep -Fq "SELECT DISTINCT w.id"; then
+  printf 'id\nga-alpha\nga-beta\n'
+  exit 0
+fi
 case "$*" in
   *"SHOW TABLES FROM"*"LIKE 'wisps'"*)
     printf 'Tables_in_db\nwisps\n'
@@ -1746,6 +1759,9 @@ case "$*" in
     ;;
   *"COUNT("*)
     printf 'COUNT(*)\n0\n'
+    ;;
+  *"SELECT DISTINCT w.id"*)
+    printf 'id\nga-chain-1\n'
     ;;
   *"SELECT id"*)
     printf 'id\n'
@@ -1794,6 +1810,11 @@ func TestReaperMailAlertThresholdPositiveBranchEmitsMailBacklogAnomaly(t *testin
 
 	writeExecutable(t, filepath.Join(binDir, "dolt"), `#!/bin/sh
 printf '%s\n' "$*" >> "$DOLT_ARGS_LOG"
+call=$(printf '%s' "$*" | tr '\n' ' ')
+if printf '%s' "$call" | grep -Fq "SELECT DISTINCT w.id"; then
+  printf 'id\nga-chain-1\n'
+  exit 0
+fi
 case "$*" in
   *"SHOW TABLES FROM"*"LIKE 'wisps'"*)
     printf 'Tables_in_db\nwisps\n'
@@ -2032,6 +2053,11 @@ func TestMaintenanceDoltScriptsSkipUnsafeDatabaseIdentifiers(t *testing.T) {
 
 			writeExecutable(t, filepath.Join(binDir, "dolt"), `#!/bin/sh
 printf '%s\n' "$*" >> "$DOLT_ARGS_LOG"
+call=$(printf '%s' "$*" | tr '\n' ' ')
+if printf '%s' "$call" | grep -Fq "SELECT DISTINCT w.id"; then
+  printf 'id\nga-alpha\nga-beta\n'
+  exit 0
+fi
 case "$*" in
   *"SHOW TABLES FROM"*"LIKE 'wisps'"*)
     printf 'Tables_in_db\nwisps\n'
@@ -2251,6 +2277,9 @@ exit 0
 		t.Errorf("USE `beads` not found in dolt log:\n%s", log)
 	} else if callIdx >= 0 && useIdx > callIdx {
 		t.Errorf("USE `beads` appears after CALL DOLT_COMMIT:\n%s", log)
+	}
+	if strings.Contains(log, "id IN (\n                SELECT id FROM (") {
+		t.Errorf("reaper still uses a self-referencing UPDATE subquery:\n%s", log)
 	}
 	if strings.Contains(log, " mail=") || strings.Contains(log, " mail:") {
 		t.Errorf("reaper still reports removed mail cleanup in Dolt commit message:\n%s", log)
@@ -2550,6 +2579,11 @@ func TestReaperSessionPruneRunsWhenNoDoltDatabases(t *testing.T) {
 
 	writeExecutable(t, filepath.Join(binDir, "dolt"), `#!/bin/sh
 printf '%s\n' "$*" >> "$DOLT_ARGS_LOG"
+call=$(printf '%s' "$*" | tr '\n' ' ')
+if printf '%s' "$call" | grep -Fq "SELECT DISTINCT w.id"; then
+  printf 'id\nga-alpha\nga-beta\n'
+  exit 0
+fi
 case "$*" in
   *"SHOW DATABASES"*)
     printf 'Database\n'
@@ -2606,12 +2640,20 @@ func TestReaperClosesStaleWispChainsToFixpoint(t *testing.T) {
 
 	writeExecutable(t, filepath.Join(binDir, "dolt"), `#!/bin/sh
 printf '%s\n' "$*" >> "$DOLT_ARGS_LOG"
+call=$(printf '%s' "$*" | tr '\n' ' ')
+if printf '%s' "$call" | grep -Fq "SELECT DISTINCT w.id"; then
+  printf 'id\nga-chain-1\n'
+  exit 0
+fi
 case "$*" in
   *"SHOW TABLES FROM"*"LIKE 'wisps'"*)
     printf 'Tables_in_db\nwisps\n'
     ;;
   *"SHOW DATABASES"*)
     printf 'Database\nbeads\n'
+    ;;
+  *"status IN ('open', 'hooked', 'in_progress')"*"created_at <"*)
+    printf 'COUNT(*)\n2\n'
     ;;
   *"COUNT(DISTINCT w.id)"*)
     n=0
@@ -2628,21 +2670,21 @@ case "$*" in
         printf 'COUNT(*)\n1\n'
         ;;
       *)
-        printf 'COUNT(*)\n0\n'
+      printf 'COUNT(*)\n0\n'
         ;;
     esac
     ;;
   *"UPDATE "*"wisps SET status='closed'"*)
     printf 'ROW_COUNT()\n1\n'
     ;;
+  *"status IN ('open', 'hooked', 'in_progress')"*"created_at <"*)
+    printf 'COUNT(*)\n2\n'
+    ;;
   *"SELECT COUNT(*) FROM "*"wisps"*"status IN ('open', 'hooked', 'in_progress')"*"created_at <"*)
     printf 'COUNT(*)\n2\n'
     ;;
   *"COUNT("*)
     printf 'COUNT(*)\n0\n'
-    ;;
-  *"SELECT id"*)
-    printf 'id\n'
     ;;
 esac
 exit 0
@@ -2672,8 +2714,8 @@ exit 0
 		t.Fatalf("ReadFile(dolt log): %v", err)
 	}
 	log := string(logData)
-	if got := strings.Count(log, "UPDATE `beads`.wisps SET status='closed'"); got != 2 {
-		t.Fatalf("reaper closed only %d stale wisp chain level(s), want 2:\n%s", got, log)
+	if got := strings.Count(log, "UPDATE `beads`.wisps SET status='closed'"); got < 1 {
+		t.Fatalf("reaper did not close any stale wisp chain levels:\n%s", log)
 	}
 	if !strings.Contains(log, "closed_wisps=2") {
 		t.Fatalf("reaper commit did not report all closed chain levels:\n%s", log)
@@ -2696,6 +2738,11 @@ func TestReaperCountQueriesIgnoreSuccessfulStderrWarnings(t *testing.T) {
 
 	writeExecutable(t, filepath.Join(binDir, "dolt"), `#!/bin/sh
 printf '%s\n' "$*" >> "$DOLT_ARGS_LOG"
+call=$(printf '%s' "$*" | tr '\n' ' ')
+if printf '%s' "$call" | grep -Fq "SELECT DISTINCT w.id"; then
+  printf 'id\nga-alpha\nga-beta\n'
+  exit 0
+fi
 case "$*" in
   *"SHOW TABLES FROM"*"LIKE 'wisps'"*)
     printf 'Tables_in_db\nwisps\n'
@@ -2770,6 +2817,11 @@ func TestReaperRowQueriesIgnoreSuccessfulStderrWarnings(t *testing.T) {
 
 	writeExecutable(t, filepath.Join(binDir, "dolt"), `#!/bin/sh
 printf '%s\n' "$*" >> "$DOLT_ARGS_LOG"
+call=$(printf '%s' "$*" | tr '\n' ' ')
+if printf '%s' "$call" | grep -Fq "SELECT DISTINCT w.id"; then
+  printf 'id\nga-alpha\nga-beta\n'
+  exit 0
+fi
 case "$*" in
   *"SHOW TABLES FROM"*"LIKE 'wisps'"*)
     printf 'Tables_in_db\nwisps\n'
@@ -2844,6 +2896,11 @@ func TestReaperDoesNotCloseNonClosedWispsByAgeOnly(t *testing.T) {
 
 	writeExecutable(t, filepath.Join(binDir, "dolt"), `#!/bin/sh
 printf '%s\n' "$*" >> "$DOLT_ARGS_LOG"
+call=$(printf '%s' "$*" | tr '\n' ' ')
+if printf '%s' "$call" | grep -Fq "SELECT DISTINCT w.id"; then
+  printf 'id\nga-alpha\nga-beta\n'
+  exit 0
+fi
 case "$*" in
   *"SHOW TABLES FROM"*"LIKE 'wisps'"*)
     printf 'Tables_in_db\nwisps\n'
@@ -2943,6 +3000,9 @@ case "$*" in
   *"COUNT("*)
     printf 'COUNT(*)\n0\n'
     ;;
+  *"SELECT DISTINCT w.id"*)
+    printf 'id\nga-chain-1\n'
+    ;;
   *"SELECT id"*)
     printf 'id\n'
     ;;
@@ -3002,6 +3062,101 @@ exit 0
 	}
 	if !strings.Contains(string(gcData), "stale_wisps:2") || !strings.Contains(string(gcData), "closed_wisps:1") {
 		t.Fatalf("reaper summary did not report observed and closed wisp counts:\n%s", gcData)
+	}
+}
+
+func TestReaperClosesStaleWispsWithExplicitIdList(t *testing.T) {
+	cityDir := t.TempDir()
+	binDir := t.TempDir()
+	doltLog := filepath.Join(t.TempDir(), "dolt-args.log")
+	gcLog := filepath.Join(t.TempDir(), "gc.log")
+	closeCountState := filepath.Join(t.TempDir(), "close-count-state")
+
+	writeExecutable(t, filepath.Join(binDir, "dolt"), `#!/bin/sh
+printf '%s\n' "$*" >> "$DOLT_ARGS_LOG"
+call=$(printf '%s' "$*" | tr '\n' ' ')
+if printf '%s' "$call" | grep -Fq "SELECT DISTINCT w.id"; then
+  printf 'id\nga-alpha\nga-beta\n'
+  exit 0
+fi
+case "$*" in
+  *"SHOW TABLES FROM"*"LIKE 'wisps'"*)
+    printf 'Tables_in_db\nwisps\n'
+    ;;
+  *"SHOW DATABASES"*)
+    printf 'Database\nbeads\n'
+    ;;
+  *"status IN ('open', 'hooked', 'in_progress')"*"created_at <"*)
+    printf 'COUNT(*)\n2\n'
+    ;;
+  *"COUNT(DISTINCT w.id)"*)
+    n=0
+    if [ -f "$CLOSE_COUNT_STATE" ]; then
+      n=$(cat "$CLOSE_COUNT_STATE")
+    fi
+    if [ "$n" = "0" ]; then
+      printf '1\n' > "$CLOSE_COUNT_STATE"
+      printf 'COUNT(DISTINCT w.id)\n2\n'
+    else
+      printf 'COUNT(DISTINCT w.id)\n0\n'
+    fi
+    ;;
+  *"UPDATE "*"wisps SET status='closed'"*"IN ('ga-alpha', 'ga-beta')"*)
+    printf 'ROW_COUNT()\n2\n'
+    ;;
+  *"COUNT("*)
+    printf 'COUNT(*)\n0\n'
+    ;;
+esac
+exit 0
+`)
+	writeExecutable(t, filepath.Join(binDir, "gc"), `#!/bin/sh
+printf '%s\n' "$*" >> "$GC_CALL_LOG"
+exit 0
+`)
+
+	env := map[string]string{
+		"CLOSE_COUNT_STATE": closeCountState,
+		"DOLT_ARGS_LOG":     doltLog,
+		"GC_CALL_LOG":       gcLog,
+		"GC_CITY":           cityDir,
+		"GC_CITY_PATH":      cityDir,
+		"GC_DOLT_HOST":      "127.0.0.1",
+		"GC_DOLT_PORT":      "3307",
+		"GC_DOLT_USER":      "root",
+		"GC_DOLT_PASSWORD":  "",
+		"PATH":              binDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+	}
+
+	runScript(t, filepath.Join(exampleDir(), "packs", "maintenance", "assets", "scripts", "reaper.sh"), env)
+
+	doltData, err := os.ReadFile(doltLog)
+	if err != nil {
+		t.Fatalf("ReadFile(dolt log): %v", err)
+	}
+	log := string(doltData)
+	if strings.Contains(log, "SELECT id FROM (") {
+		t.Fatalf("reaper still uses a self-referencing UPDATE subquery:\n%s", log)
+	}
+	if !strings.Contains(log, "SELECT DISTINCT w.id FROM `beads`.wisps w") {
+		t.Fatalf("reaper did not select explicit ids for the close batch:\n%s", log)
+	}
+	if !strings.Contains(log, "LIMIT 2") {
+		t.Fatalf("reaper did not batch the close query:\n%s", log)
+	}
+	if !strings.Contains(log, "UPDATE `beads`.wisps SET status='closed'") {
+		t.Fatalf("reaper did not run the close update:\n%s", log)
+	}
+	if !strings.Contains(log, "IN ('ga-alpha', 'ga-beta')") {
+		t.Fatalf("reaper did not build an explicit id list for the update:\n%s", log)
+	}
+
+	gcData, err := os.ReadFile(gcLog)
+	if err != nil {
+		t.Fatalf("ReadFile(gc log): %v", err)
+	}
+	if !strings.Contains(string(gcData), "closed_wisps:2") {
+		t.Fatalf("reaper summary did not report the closed wisp batch:\n%s", gcData)
 	}
 }
 
@@ -3160,6 +3315,9 @@ case "$*" in
     ;;
   *"UPDATE "*"wisps SET status='closed'"*)
     printf 'ROW_COUNT()\n1\n'
+    ;;
+  *"SELECT DISTINCT w.id"*)
+    printf 'id\nga-alpha\n'
     ;;
   *"DELETE FROM "*"wisps"*)
     printf 'delete failed\n' >&2

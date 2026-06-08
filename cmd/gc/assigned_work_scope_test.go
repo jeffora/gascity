@@ -279,3 +279,63 @@ func TestSessionAssignmentIdentifiersForConfigConfiguredNamedSessionFallbackIsCo
 		})
 	}
 }
+
+func TestRoutedToOrLegacyWorkflowTargetPrecedence(t *testing.T) {
+	tests := []struct {
+		name     string
+		metadata map[string]string
+		want     string
+	}{
+		{
+			name: "run_target takes precedence over routed_to",
+			metadata: map[string]string{
+				"gc.run_target": "target-a",
+				"gc.routed_to":  "target-b",
+			},
+			want: "target-a",
+		},
+		{
+			name: "falls back to routed_to when run_target is empty",
+			metadata: map[string]string{
+				"gc.run_target": "",
+				"gc.routed_to":  "target-b",
+			},
+			want: "target-b",
+		},
+		{
+			name: "works for non-workflow beads as well",
+			metadata: map[string]string{
+				"gc.kind":       "step",
+				"gc.run_target": "target-a",
+				"gc.routed_to":  "target-b",
+			},
+			want: "target-a",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := beads.Bead{Metadata: tt.metadata}
+			got := routedToOrLegacyWorkflowTarget(b)
+			if got != tt.want {
+				t.Errorf("routedToOrLegacyWorkflowTarget() = %q, want %q", got, tt.want)
+			}
+
+			candidates := routedToAndLegacyWorkflowCandidates(b)
+			if len(candidates) > 0 && candidates[0] != tt.want {
+				t.Errorf("routedToAndLegacyWorkflowCandidates() primary = %q, want %q", candidates[0], tt.want)
+			}
+
+			// Test hook claim matching as well
+			claimTarget := hookClaimRoute(b)
+			if claimTarget != tt.want {
+				t.Errorf("hookClaimRoute() = %q, want %q", claimTarget, tt.want)
+			}
+
+			matches := hookClaimMatchesRoute(b, []string{tt.want})
+			if !matches {
+				t.Errorf("hookClaimMatchesRoute() expected true for target %q", tt.want)
+			}
+		})
+	}
+}

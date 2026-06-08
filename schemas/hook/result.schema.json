@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "ok",
+    "command",
+    "action"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1"
+    },
+    "ok": {
+      "const": true
+    },
+    "command": {
+      "type": "string"
+    },
+    "action": {
+      "type": "string"
+    },
+    "reason": {
+      "type": "string"
+    },
+    "bead_id": {
+      "type": "string"
+    },
+    "assignee": {
+      "type": "string"
+    },
+    "route": {
+      "type": "string"
+    },
+    "continuation_assigned": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "drain_acknowledged": {
+      "type": "boolean"
+    }
+  },
+  "additionalProperties": true
+}
