@@ -8523,6 +8523,32 @@ func TestSweepClosedOrderTrackingRetentionAcrossStoresBounded_DoesNotBypassRetai
 	}
 }
 
+// TestOrderDispatchTrackingIndexConcurrentEntriesForStore verifies that
+// concurrent calls to entriesForStore and historyEntriesForStore on the same
+// index do not race. Before the mutex fix, -race detected writes to idx.entries
+// and idx.errs from multiple goroutines simultaneously (e.g. when a
+// gateOpenWorkBounded timeout fires and the orphaned goroutine races a new one).
+func TestOrderDispatchTrackingIndexConcurrentEntriesForStore(t *testing.T) {
+	t.Parallel()
+	store := beads.NewMemStore()
+	idx := newOrderDispatchTrackingIndex()
+
+	const workers = 20
+	var wg sync.WaitGroup
+	wg.Add(workers * 2)
+	for i := 0; i < workers; i++ {
+		go func() {
+			defer wg.Done()
+			_, _ = idx.entriesForStore(store, "key-open")
+		}()
+		go func() {
+			defer wg.Done()
+			_, _ = idx.historyEntriesForStore(store, "key-history")
+		}()
+	}
+	wg.Wait()
+}
+
 func TestSweepClosedOrderTrackingRetentionAcrossStoresBounded_ZeroLimitDeletesNothing(t *testing.T) {
 	now := time.Date(2026, 6, 7, 12, 0, 0, 0, time.UTC)
 	policy := orderTrackingRetentionPolicy{
