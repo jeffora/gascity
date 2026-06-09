@@ -1,0 +1,417 @@
+--- .gc/design-reviews/ga-j195cx/attempt-80/design-before.md	2026-05-11 23:17:23.685797960 +0000
++++ engdocs/design/formula-compiler-requirements.md	2026-05-12 00:53:20.815235619 +0000
+@@ -709,13 +709,38 @@
+ | `on_complete` | `on_complete` | `formula_compiler` owner grammar |
+ | registered workflow-control metadata key | `workflow_metadata_key` | `formula_compiler` owner grammar |
+ | registered workflow-control metadata enum value | `workflow_metadata_value` | `formula_compiler` owner grammar |
+-| step or compose expansion | `step_expand` | `formula_compiler` owner grammar |
++| authored `step.expand` field | `step_expand` | `formula_compiler` owner grammar |
+ | `expand_vars` | `expand_vars` | `formula_compiler` owner grammar |
+ 
+ `AxisMinimum.Minimum` strings are parsed only by the owning axis grammar. No
+ registry generator may parse `">=2"` with ad hoc string splitting, numeric
+ coercion, trimming, or a generic semver helper.
+ 
++<!-- REVIEW: added per attempt-80-construct-registry-executability -->
++
++Compose traversal is not a construct identity. `compose.expand`, `compose.map`,
++`compose.aspects`, and transitive imports appear only in `contribution_path`;
++the construct identity remains the decoded feature found inside the contributed
++formula or template. A row with `contribution_path=compose_expand` and
++`construct_identity=step_expand` is valid only when the contributed template
++contains an authored `Step.Expand` field. A row that uses `step_expand` merely
++because compose traversal happened is invalid fixture input.
++
++Construct registry invariants are generated from typed axis parsers:
++
++| Invariant | Failure |
++|---|---|
++| `AxisMinimum.Minimum` parses through the `formula_compiler` grammar to exactly `Capability` | generator error; the row is not emitted |
++| `min_compiler_capability` equals the parsed capability for every registry row | `TestConstructRegistryMinimumMatchesCapability` fails |
++| every registry row has at least one matrix row by `construct_identity`, `construct_location`, and `contribution_path` | `TestConstructRegistryRowsCoveredByMatrix` fails |
++| every matrix row names a checked `coverage_intent_id` from the suite registry, not free text | matrix schema validation fails |
++| every suite count lock is a literal integer after generation | `TestCompilerRequirementMatrixCountsLocked` fails |
++
++The matrix schema keeps human-readable `coverage_intent` for review, but CI
++keys on `coverage_intent_id`. The checked ids live in
++`internal/formula/testdata/coverage_intents.yaml`, so caller-path vocabulary,
++contribution-path vocabulary, and suite ownership cannot drift independently.
++
+ Every suite row carries `row_kind`, `coverage_intent`, `dimension_owner`, and
+ `zero_write_assertion` when the caller can mutate state. The generator rejects a
+ durable caller row that lacks an explicit zero-write assertion for roots,
+@@ -1277,6 +1302,31 @@
+ config generation, reload id, host capability, normalized requirement, or the
+ same-identity artifact-reuse distinction.
+ 
++<!-- REVIEW: added per attempt-80-host-authority-guards -->
++
++Host capability authority is guarded inside `internal/formula`, not only at
++call sites. `TestNoFormulaPackageGlobalCapabilityReads` scans production files
++in `internal/formula` and fails on reads of legacy process-global state such as
++`formula_v2`, `graph_workflows`, `IsFormulaV2Enabled`, or
++`SetFormulaV2Enabled`, except for explicitly named edge adapters that build a
++`HostCapabilityInput` and return immediately to callers outside normalization.
++Those adapter rows must name an owner, expiry phase, and replacement test in
++`internal/formula/testdata/host_capability_adapter_allowlist.yaml`.
++
++`RequirementSource` is provenance-only. A separate static guard,
++`TestRequirementSourceProvenanceOnly`, fails when production code outside
++diagnostic construction, warning persistence, migration reports, compatibility
++reports, fixtures, or docs branches on `RequirementSource` constants. Runtime
++behavior must branch on normalized capability values and accepted-artifact
++validation results only.
++
++Property tests close the two authority escape hatches:
++
++| Property | Assertion |
++|---|---|
++| `CompilerCapability(0)` non-escape | fuzzed raw fields, host inputs, test overrides, artifact loads, and metadata reads never produce a normalized requirement, host capability, artifact identity, or wire diagnostic that treats capability `0` as valid |
++| same-identity host downgrade write intent | a disabled current host can authorize only operations whose accepted artifact, root artifact ref, non-host identity, projection snapshot, and write intent match; any changed source, vars, options, search path, binding, projection version, or write boundary fails before durable writes |
++
+ Graph-apply enablement follows the same lifetime rule. Package globals such as
+ `SetGraphApplyEnabled` and `IsGraphApplyEnabled` may remain only as temporary
+ edge shims while caller migration is in progress. Durable graph-apply
+@@ -1831,6 +1881,51 @@
+ or `gc.formula_contract` outside the parser, compatibility metadata writer,
+ shared workflow-root predicate, tests, fixtures, and docs.
+ 
++<!-- REVIEW: added per attempt-80-repository-wide-caller-inventory -->
++
++The caller manifest is repository-wide. Its generator scans Go production
++code, first-party packs, examples, tutorials, generated prompt templates, and
++workflow-pack prompt snippets before any requires-only formula is distributed.
++The scan inputs are explicit: `internal/graphroute`, `internal/sling`,
++`internal/api`, `internal/dispatch`, `internal/molecule`,
++`internal/convergence`, `cmd/gc`, `internal/bootstrap/packs`,
++`.gc/system/packs`, `examples`, `docs/tutorials`, `docs/reference`, workflow
++prompt templates, and formula snippets embedded in Markdown. Omitting a tree is
++a schema error, not an empty result.
++
++Prompt and formula command references are producer candidates even when no Go
++code shells out to the command. The manifest must classify every first-party
++prompt, formula, tutorial, or example that can instruct an agent to run
++`gc bd mol wisp`, `gc bd mol burn`, `gc bd mol cook`, `gc bd mol cook-on`, or
++any equivalent molecule/materialization command. Each row chooses exactly one
++outcome before first-party requires-only distribution:
++
++| Outcome | Meaning |
++|---|---|
++| `rewritten_native` | prompt/formula now routes through a native compile/accept producer before durable writes |
++| `blocked_until_phase` | command remains documented only for legacy dual-declared formulas and the inventory names the blocking phase |
++| `validation_only` | command can inspect or report but is fixture-proven unable to authorize roots, children, hooks, convoys, retry, fanout, or convergence writes |
++| `deleted` | prompt/formula command reference is removed with a deletion test that proves no generated prompt still emits it |
++| `legacy_classified` | retained only for old dual-declared roots with an owner, expiry phase, and explicit unsupported requires-only diagnostic |
++
++Production guards are also repository-wide. `TestNoNewFormulaRawConsumers`
++and `TestDurableWritersRequireAcceptedArtifact` run against every production
++Go package, generated command helper, and first-party prompt/formula command
++inventory row. Allowlist entries are narrow: they name the file or prompt
++source, line pattern, symbol or command, owner package, expiry phase,
++replacement API, and blocking test. A package-level or directory-level
++allowlist is invalid because it can hide a second raw consumer in the same
++file.
++
++Retired helper deletion tests are mandatory. Each deleted helper or prompt
++command reference has a paired test such as
++`TestDeclaresGraphV2ContractDeleted`, `TestValidateForConvergenceNotImported`,
++`TestNoLegacyMolProducerPromptReferences`, or
++`TestNoBDMolRuntimeAuthorization`. The tests fail if a replacement helper with
++the same behavior appears under a new name, if a prompt can still emit the
++legacy producer command, or if a generated first-party formula can still reach
++a raw `Recipe`/`CompileResult` durable write path.
++
+ <!-- REVIEW: added per compiler-authority-enforcement -->
+ 
+ The guard starts from a checked-in allowlist, not from an aspirational grep
+@@ -2371,6 +2466,76 @@
+ maintainer opt-out, a compatibility branch/LTS plan, or a validation artifact
+ that proves the pinned object no longer needs legacy `contract`.
+ 
++<!-- REVIEW: added per attempt-80-external-support-schema -->
++
++The canonical external-support artifact is
++`docs/release/formula-compiler-external-support.json`; the Markdown file is a
++rendered human checklist generated from that JSON. The JSON schema is:
++
++```json
++{
++  "schema_version": 1,
++  "generated_at": "2026-05-12T00:00:00Z",
++  "release_captain": "name",
++  "alias_window": {
++    "start_release": "v0.x.y",
++    "start_date": "2026-05-12",
++    "minimum_completed_minor_releases": 2,
++    "minimum_calendar_days": 60,
++    "support_window_closes_at": "2026-07-11T00:00:00Z",
++    "public_notice_url": "https://...",
++    "public_notice_published_at": "2026-05-12T00:00:00Z"
++  },
++  "rows": []
++}
++```
++
++Each `rows[]` item must include `row_id`, `status`, `source_class`,
++`discovery_method`, `pack_name`, `source`, `requested_ref`, `locked_revision`,
++`content_hash`, `binding_path`, `parent_binding`, `lockfile_key`,
++`maintainer_contact`, `maintainer_contact_status`, `notice_sent_at`,
++`public_notice_url`, `migration_path`, `edit_target`, `evidence_artifact`,
++`last_validated_at`, `expires_after_release`, `support_window_closes_at`, and
++`blocks_alias_removal`. The alias-removal gate consumes this JSON directly and
++fails on missing fields, duplicate `row_id`, malformed timestamps, unknown enum
++values, non-immutable `locked_revision` for a row marked pinned, missing
++content hash, stale `last_validated_at`, or a Markdown checklist that is not
++generated from the JSON digest.
++
++Unknown and unreachable consumers have deterministic expiry semantics. An
++`unknown` row starts active support and blocks alias removal until a public
++notice URL is published, the alias-window start artifact records that URL, the
++later of two completed minor releases or 60 calendar days has elapsed, and the
++latest discovery run is non-stale. An `unreachable` row may expire only with
++immutable lock/cache evidence or a public notice plus saved acquisition logs;
++network failure alone is exit `1`, not an expiry decision.
++
++`formula.migration.pin_pack_revision` is a migration hint for consumers, not a
++formula edit. It tells a pack consumer to pin an import, registry source, or
++lockfile entry to an immutable revision that is known to contain the dual or
++requires-compatible formula. Its JSON includes `edit_target`:
++
++| `edit_target` | Meaning |
++|---|---|
++| `consumer_import_ref` | edit the consumer's `[imports.<binding>]` ref or version constraint |
++| `consumer_lockfile` | refresh the consumer lockfile to the named immutable revision |
++| `upstream_pack_branch` | ask the upstream maintainer to publish a compatibility branch or tag |
++| `forked_pack_source` | consumer must fork or mirror because the original pinned SHA cannot be edited |
++| `none` | evidence shows no pin change is needed |
++
++For SHA-pinned packs, the original source object is immutable. Validation must
++not suggest editing that SHA in place. The remediation either keeps alias
++support, points to an upstream compatibility branch/LTS binary, records a
++maintainer opt-out, or names a consumer-side import/lockfile edit target. A
++hint that lacks this edit-target distinction is malformed and blocks alias
++removal.
++
++`[pack] requires_gc` compatibility is part of the same evidence bundle. The
++external-support row records the exact `requires_gc` string, the active binary
++version used by the comparator, the comparator result, and whether the parser
++accepted the grammar before formula validation. Alias removal cannot rely on a
++pack-floor row whose `requires_gc` was parsed by an older or ad hoc grammar.
++
+ <!-- REVIEW: added per migration-gates-measurable -->
+ 
+ Additional compatibility gates:
+@@ -2888,9 +3053,12 @@
+ - Event payloads for compile failures are typed and registered in
+   `events.KnownEventTypes`. Payload fields include `code`, `severity`,
+   `formula`, `source_kind`, `source_path`, `source_key`, `source_value`,
++  `source_line`, `source_column`,
+   `requirement_source_kind`, `requirement_source_path`, `requirement_source_key`,
+-  `requirement_source_value`, `host_source_kind`, `host_source_path`,
+-  `host_source_key`, `host_source_value`, `normalized_requirement`,
++  `requirement_source_value`, `requirement_source_line`,
++  `requirement_source_column`, `host_source_kind`, `host_source_path`,
++  `host_source_key`, `host_source_value`, `host_source_line`,
++  `host_source_column`, `normalized_requirement`,
+   `host_capability`, `message`, `remediation`, and
+   `once_key`. No event path may hand-write JSON or project diagnostics through
+   `map[string]any`.
+@@ -2930,6 +3098,8 @@
+     HostSourcePath        string `json:"host_source_path,omitempty"`
+     HostSourceKey         string `json:"host_source_key,omitempty"`
+     HostSourceValue       string `json:"host_source_value,omitempty"`
++    HostSourceLine        int    `json:"host_source_line,omitempty"`
++    HostSourceColumn      int    `json:"host_source_column,omitempty"`
+     NormalizedRequirement string `json:"normalized_requirement,omitempty"`
+     HostCapability        string `json:"host_capability,omitempty"`
+     Message               string `json:"message"`
+@@ -3035,6 +3205,8 @@
+           host_source_path: city.toml
+           host_source_key: daemon.formula_v2
+           host_source_value: "false"
++          host_source_line: 12
++          host_source_column: 1
+           normalized_requirement: ">=2"
+           host_capability: "1"
+           remediation: enable [daemon] formula_v2 or choose a v1 formula
+@@ -3073,6 +3245,76 @@
+ and polling failures are visible to the caller but do not create Event Bus
+ entries or durable grouped failure rows.
+ 
++<!-- REVIEW: added per attempt-80-operator-rollup-surface -->
++
++Operators get one bounded remediation surface for host/config failures. Every
++background producer that encounters `formula.compiler_requirement_unsatisfied`
++or `formula.host_capability_invalid` writes or updates a typed rollup row before
++returning:
++
++```go
++type FormulaDiagnosticRollup struct {
++    SchemaVersion    int
++    RollupKey        string
++    RollupClass      string // host_config, formula_source, pack_source, internal
++    Title            string
++    Remediation      string
++    ConfigGeneration uint64
++    ProducerCount    int
++    SubjectCount     int
++    OccurrenceCount  int
++    FirstSeenAt      time.Time
++    LastSeenAt       time.Time
++    LastEmittedAt    time.Time
++    BurstBudget      FormulaDiagnosticBurstBudget
++    Children         []FormulaDiagnosticRollupChild
++}
++
++type FormulaDiagnosticRollupChild struct {
++    Producer       string
++    SubjectID      string
++    Formula        string
++    Diagnostic     FormulaDiagnosticPayload
++    OccurrenceCount int
++    LastSeenAt     time.Time
++}
++```
++
++The rollup grouping key is
++`(rollup_class, code, remediation, host_source_path, host_source_key,
++host_source_value, host_capability, config_generation)`. Children preserve the
++producer, subject id, formula, requirement source path/key/value, content hash,
++source line/column, requirement line/column, and host line/column. A disabled
++host therefore appears as one dashboard/API row with bounded child details
++instead of N unrelated order, convergence, retry, fanout, and controller rows.
++
++Rollup state is producer-owned diagnostic state, not accepted-artifact state.
++Accepted artifacts remain immutable and store only the diagnostics and warnings
++accepted at compile time. Repeat occurrence counters, last-seen timestamps,
++event cadence etags, burst budgets, and config-generation reset state live in
++the producer diagnostic subject or workflow root through
++`FormulaDiagnosticGroupState` and `FormulaDiagnosticRollup`. A background
++warning or fatal occurrence may update those mutable records; it must not edit
++an existing accepted artifact.
++
++Event cadence is fixture-locked:
++
++| Scenario | Event behavior | State behavior |
++|---|---|---|
++| first occurrence in a new config generation | append one typed producer event and one rollup event when the producer policy enables events | create group and rollup with `OccurrenceCount=1` |
++| repeated occurrence inside the burst window | no Event Bus append after the configured budget is spent | increment group and rollup counters through CAS |
++| process restart | reload persisted group and rollup before applying LRU suppression | counters continue from stored state |
++| successful config reload, even with equivalent values | new rollup key because `ConfigGeneration` changed | old row remains historical; new row starts at one |
++| failed config reload | no generation change | current row continues |
++| formula/config fixed | clear or mark resolved through producer cleanup | accepted artifacts are unchanged |
++
++The Huma response, generated TypeScript type, dashboard grouping, direct CLI
++status view, API-routed CLI status view, and event payload all project the same
++rollup fields. Golden fixtures for disabled host capability cover direct CLI,
++API-routed CLI, Huma JSON, generated TypeScript, dashboard state, producer
++event payload, rollup event payload, restart/reload behavior, burst-budget
++suppression, and zero protected writes.
++
+ <!-- REVIEW: added per attempt-54-grouped-diagnostic-state -->
+ 
+ Background grouped diagnostic state is a typed producer-owned record:
+@@ -4302,12 +4544,14 @@
+    any diagnostic that can become visible in later phases lands here, before
+    that diagnostic is exposed to operators. This phase also marks
+    `engdocs/proposals/formula-migration.md` superseded or updates it in place,
+-   and either fixtures JSON formula requirements or retires the JSON loader.
++   either fixtures JSON formula requirements or retires the JSON loader, lands
++   first-party dual declarations, and saves a green first-party inventory.
+ 3. First-party pack-floor declaration: write or update first-party `[pack]
+    requires_gc` floors for built-in graph packs, `.gc/system/packs`, examples,
+    tutorials, fixtures, and Ralph demo packs from
+    `docs/release/formula-compiler-min-floor.json`. This phase does not enforce
+-   the floor yet; it makes the upcoming resolver/import enforcement auditable.
++   the floor or expose new diagnostics yet; it makes the upcoming
++   resolver/import enforcement auditable.
+ 4. Caller migration: move callers to the normalized result in reversible
+    sub-phases. At caller sub-phase 4a the static no-raw-consumer guard becomes
+    blocking for new production raw consumers; existing consumers remain only
+@@ -4346,6 +4590,33 @@
+ while `docs/release/formula-compiler-min-floor.json` says
+ `first_party_requires_only_allowed: false`.
+ 
++<!-- REVIEW: added per attempt-80-rollout-sequencing-lock -->
++
++The chosen Phase 2/3 sequence is: first-party dual declarations and their green
++inventory gate land in Phase 2 before any visible/runtime diagnostic surface.
++Phase 3 is dormant floor declaration only; it may update first-party
++`[pack] requires_gc` metadata and saved release artifacts, but it may not make a
++new diagnostic visible, distribute requires-only graph formulas, or migrate a
++durable producer. If Phase 2 cannot land the dual declarations, first-party
++inventory, docs/check bundle, generated help, API/dashboard schema changes, and
++proposal supersession together, then every visible diagnostic surface stays
++disabled until that bundle is complete.
++
++Writer lockdown is a hard predecessor for producer migration. Before Phase 4b
++through 4f can merge, Phase 4a must prove all of these:
++
++| Lockdown proof | Required evidence |
++|---|---|
++| accepted-artifact-only writer signatures | root, child, attachment, retry, fanout, order, convergence, and workflow-finalize writers accept `AcceptedCompileArtifact` or an operation-specific wrapper that embeds it |
++| no bare durable authority | static guard fails when a durable writer accepts bare `*Recipe`, bare `*CompileResult`, caller-built metadata, raw `NormalizedRequirements`, or `bd`/prompt output as authorization |
++| zero-write fixtures | disabled host and fatal diagnostic cases snapshot roots, children, dependencies, hooks, convoys, workflow metadata, retry metadata, fanout state, convergence state, fired-order metadata, and artifact refs |
++| manifest-green repository scan | Go code plus first-party packs, examples, tutorials, docs snippets, and prompt commands have generated caller rows with owner, expiry phase, replacement API, and blocking test |
++| deletion/compatibility tests | retired helpers and legacy `gc bd mol ...` producer commands are deleted, validation-only, or blocked for requires-only formulas |
++
++A producer sub-phase cannot substitute a local package test for this shared
++lockdown gate. If any row is absent or report-only, the migrated producer must
++remain disabled before its first durable write.
++
+ <!-- REVIEW: added per DR55-rollout-operable-gates -->
+ 
+ Each phase has a PR home, owner, local command, and rollback unit:
+@@ -4596,6 +4867,52 @@
+ and pre-create failures with zero root, iteration, hook, dependency, convoy,
+ artifact-ref, or retry metadata writes.
+ 
++<!-- REVIEW: added per attempt-80-convergence-preflight-boundary -->
++
++Every convergence entry point has a named preflight sequence before durable
++state can change:
++
++| Entry point | Required sequence before first write | Writes forbidden on failure |
++|---|---|---|
++| create | resolve source -> `CompileWithResult` -> `AcceptCompileResult` -> `ValidateAcceptedArtifact(create)` -> `ProjectAcceptedFormula` -> `ValidateProjection(create)` | convergence root, first iteration, hook, dependency, convoy, artifact ref |
++| retry | load root artifact -> validate same identity and retry intent, or compile/accept changed target against current host -> project -> validate retry inputs | retry metadata, retry-run bead, replacement child, hook, dependency |
++| next iteration | load and validate root artifact -> project retry/iteration fields -> validate iteration intent | iteration bead, dependency, hook, attempt metadata |
++| manual iterate | same as next iteration, plus validate the operator-supplied step/vars against projection before writes | manual iteration bead, retry metadata, hook, dependency |
++| speculative pour | compile/accept every candidate formula and validate every projection before creating any pending wisp | pending wisp root, child beads, convoy links, adoption metadata |
++| fallback pour | validate the original root artifact and the fallback formula artifact before fallback state changes | fallback root/child, fallback metadata, convoy, hook |
++| missing-state repair | load root artifact, validate write intent, project expected convergence state, and compare to store snapshot before repair | state repair metadata, generated child, dependency, hook |
++| missing-child repair | load root artifact, project expected child identity, and compile/accept only if the selected formula identity changes | replacement child, dependency, hook, repair marker |
++| pending-wisp adoption | validate candidate artifact and projection before adopting or hooking the pending wisp | adoption metadata, hook, convoy, child mutation |
++| pending-wisp burn | validate root/candidate artifact enough to classify ownership before cleanup | burn metadata, convoy cleanup, child deletion or close actions |
++
++`PourWisp` is not a write-authorizing shortcut. Its first line after loading
++inputs is a call to the same preflight helper used by create/retry. If a path
++cannot supply the required accepted artifact or current-host compile input, it
++returns a typed diagnostic and performs no convergence, wisp, hook, convoy, or
++repair writes.
++
++Active-loop unsatisfied requirements have a stable failure contract. If an
++already active convergence loop later reaches a new or changed formula whose
++requirement cannot be satisfied, the loop enters `waiting_on_formula_requirement`
++instead of creating partial graph state:
++
++| Surface | Required data |
++|---|---|
++| root metadata | `gc.convergence_waiting_reason=formula_requirement`, diagnostic code, `OnceKey`, host capability, config generation, and last checked time |
++| status/API/dashboard | typed `ConvergenceFormulaBlockedStatus` with convergence id, operation, candidate formula, diagnostic payload, retryable flag, and remediation |
++| event | one registered `convergence.formula_compile_failed` event per burst cadence with the same diagnostic payload and occurrence count |
++| retry semantics | automatic retry only after config generation, formula content hash, selected formula identity, or operator retry request changes |
++| pending-wisp cleanup | pending wisps created before the failure are either left untouched if they predate the failing operation, or marked `blocked_by_formula_requirement` and unhooked when they were created by the failing operation |
++
++The waiting state is diagnostic state and may be updated through the grouped
++diagnostic CAS path. It is not an accepted compile artifact and cannot
++authorize future writes. Clearing it requires a successful preflight for the
++same operation or explicit operator abandonment/cleanup. Fixtures cover active
++loop create, retry, manual iterate, next iteration, speculative pour, fallback
++pour, missing-state repair, missing-child repair, pending-wisp adoption, and
++pending-wisp burn with disabled host, unsupported future requirement,
++projection failure, and diagnostic-state write failure.
++
+ <!-- REVIEW: added per attempt-54-convergence-ownership-contract -->
+ 
+ The package-boundary flow is normative:

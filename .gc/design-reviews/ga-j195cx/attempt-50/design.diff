@@ -1,0 +1,382 @@
+--- .gc/design-reviews/ga-j195cx/attempt-50/design-before.md	2026-05-11 00:44:10.723079217 +0000
++++ .gc/design-reviews/ga-j195cx/attempt-50/design-after.md	2026-05-11 02:17:05.680655022 +0000
+@@ -606,6 +606,29 @@
+ beads, wisps, convoys, dependencies, hooks, retry metadata, convergence state,
+ or root metadata.
+ 
++<!-- REVIEW: added per attempt-50-parser-edge-closure -->
++
++The grammar and raw-shape suites must include byte-exact edge rows for signed
++strings (`">=+2"`), zero and lower-than-supported strings (`">=0"` and
++`">=-1"`), leading-zero strings (`">=02"`), overflow-sized digit strings,
++tab/newline/carriage-return variants around the operator or value,
++Unicode lookalike operators and digits, Unicode whitespace, escaped NUL and
++other control characters, TOML integers at zero/negative/overflow boundaries,
++and JSON-only shapes such as `null`, object, nested object, duplicate object
++member when the JSON reader can report it, and array. None of these rows may
++be accepted by trimming, numeric coercion, Unicode normalization, or
++best-effort parsing.
++
++`check` is a v2-only construct in this design. Any existing reference doc,
++tutorial, fixture, or generated example that presents `check` as valid for
++default-capability formulas is stale and must either dual-declare
++`contract = "graph.v2"` plus `[requires] formula_compiler = ">=2"` during the
++alias window or be rewritten as a v1-compatible example. The first
++implementation PR must enumerate first-party formulas, examples, tutorials,
++and fixtures containing `check`, `retry`, `on_complete`, workflow-control
++metadata, fanout, expansion, aspect, or convergence syntax and classify each
++as `dual-declare`, `rewrite-v1`, or `delete-stale-fixture`.
++
+ <!-- REVIEW: added per legacy-version-bypass -->
+ 
+ Legacy `version` is never a compiler requirement. The matrix must cross
+@@ -1202,6 +1225,24 @@
+ or a preview-only `CompileResult` without going through the compiler-owned
+ acceptance function.
+ 
++<!-- REVIEW: added per attempt-50-durable-write-guards -->
++
++This is enforced by blocking tests, not code-review convention:
++
++| Guard | Fails when | Owner |
++|---|---|---|
++| `TestNoRecipeGraphWorkflowSynthesis` | production code outside `internal/formula` assigns `Recipe.GraphWorkflow` or derives it from raw metadata | `internal/formula` |
++| `TestDurableWritersRequireAcceptedArtifact` | a function that can write roots, children, dependencies, hooks, convoys, retry metadata, fanout state, or convergence state accepts only `*Recipe`, `*CompileResult`, or caller-built metadata | `internal/molecule` with per-package fixtures |
++| `TestNoRawFormulaMetadataReadsOutsideOwners` | production code outside `internal/formula` and `internal/sourceworkflow` reads `gc.formula_*`, raw `contract`, or raw `[requires]` for behavior | `internal/formula` |
++| `TestNoConvergenceSubsetParserUse` | production convergence code imports the legacy subset parser, reopens formula TOML, or reconstructs required vars outside the projection | `internal/convergence` |
++| `TestRawConsumerAllowlistExpiry` | an allowlist row has no owner, replacement test, and rollout-phase expiry, or survives after its owning sub-phase is complete | `internal/formula` |
++
++The first implementation PR seeds these guards in report mode with the current
++manifest. Phase 3a turns new violations blocking; each caller-migration
++sub-phase must remove or narrow the rows it owns before completion. A PR that
++adds a durable writer or graph-control mutator must add its accepted-artifact
++signature and zero-write fixture in the same change.
++
+ Durable preflight contract:
+ 
+ | Entry point | Must complete before first durable write | Writes forbidden on fatal diagnostic |
+@@ -1494,11 +1535,14 @@
+ floor artifact says all supported readers understand the JSON `requires`
+ object, or the JSON formula loader is formally retired.
+ 
+-The alias window is not time-based. The release captain for this migration may
+-remove legacy `contract` support only after all of these are true:
++The alias window is evidence-based with a calendar floor. The release captain
++for this migration is the only role that may declare a gate satisfied, and the
++declaration must cite the saved artifacts below. The parser may remove legacy
++`contract` support only after all of these are true:
+ 
+ 1. Every first-party pack, example, test fixture, and tutorial has shipped with
+-   `[requires]` for at least two minor releases.
++   `[requires]` for at least two completed minor releases and at least 60
++   calendar days after the first published release containing dual declarations.
+ 2. `gc formula validate --all-packs --legacy-contract-report` reports zero
+    first-party `legacy_only` formulas and zero first-party `dual_declared`
+    formulas.
+@@ -1512,6 +1556,15 @@
+ 5. CI's stale-guidance check rejects new docs that teach `contract` as the
+    canonical surface.
+ 
++`docs/release/formula-compiler-compatibility.yaml` is the executable source of
++truth for active old readers. PR descriptions, comments, or release notes do
++not count unless the YAML names the exact binary version or SHA and the corpus
++result. Unknown external packs are treated as supported legacy consumers until
++`docs/release/formula-compiler-external-support.md` marks them expired or
++not-needed with a saved inventory. SHA-pinned external packs keep alias support
++unless the artifact names a compatibility branch, LTS binary, or explicit
++maintainer opt-out path.
++
+ <!-- REVIEW: added per migration-gates-measurable -->
+ 
+ Additional compatibility gates:
+@@ -1654,6 +1707,20 @@
+ missing, has `status: active`, or names supported readers that still require
+ legacy `contract`.
+ 
++External-support status transitions are checked:
++
++| Status | Meaning | Allowed transition |
++|---|---|---|
++| `active` | alias support is still required for unknown or named external consumers | to `expired` only with inventory evidence and published migration notice |
++| `expired` | support window elapsed and external consumers have a named migration path | back to `active` only for a documented compatibility incident |
++| `not-needed` | no external support obligation exists for this source class | to `active` when a supported external pack, SHA pin, or old reader is discovered |
++
++First-party dual-declaration ownership belongs to the release captain until the
++minimum-floor artifact allows requires-only distribution. Individual feature
++PRs may add `[requires]`, but they may not remove first-party `contract`
++aliases, dual root stamps, or compatibility fixtures without a release-captain
++update to the minimum-floor and compatibility artifacts.
++
+ <!-- REVIEW: added per DR33-rollout-ownership -->
+ 
+ The initial implementation seeds these artifacts with conservative blocking
+@@ -1801,19 +1868,19 @@
+ 
+ Diagnostic projection matrix:
+ 
+-| Code | Canonical message/remediation | CLI | API | Dashboard | Events |
+-|---|---|---|---|---|---|
+-| `formula.requirement_unknown_axis` | `unsupported [requires] key <key>` / remove it or upgrade to a binary that supports the axis | fatal stderr, exit 1 | HTTP 400 typed diagnostic | formula preview validation error | no event except controller/order failure wrapper |
+-| `formula.requirement_invalid_type` | `<key> must be a TOML string` / use `formula_compiler = ">=2"` | fatal stderr, exit 1 | HTTP 400 | formula preview validation error | no event except controller/order failure wrapper |
+-| `formula.compiler_requirement_invalid_syntax` | `invalid formula compiler requirement <value>` / use omitted, `>=1`, or `>=2` exactly | fatal stderr, exit 1 | HTTP 400 | formula preview validation error | no event except controller/order failure wrapper |
+-| `formula.compiler_requirement_unsupported_future` | `formula compiler capability <N> is not supported by this binary` / upgrade Gas City or use `>=1` or `>=2` | fatal stderr, exit 1 | HTTP 400 | formula preview validation error | no event except controller/order failure wrapper |
+-| `formula.compiler_requirement_unsupported` | `unsupported legacy formula contract <value>` / use `[requires] formula_compiler = ">=2"` | fatal stderr, exit 1 | HTTP 400 | formula preview validation error | no event except controller/order failure wrapper |
+-| `formula.compiler_requirement_conflict` | `contract and [requires] disagree` / make both declare graph v2 or remove `contract` | fatal stderr, exit 1 | HTTP 400 | formula preview validation error | no event except controller/order failure wrapper |
+-| `formula.compiler_requirement_missing` | `v2-only construct requires formula_compiler = ">=2"` / add `[requires] formula_compiler = ">=2"` | fatal stderr, exit 1 | HTTP 400 | formula preview validation error | no event except controller/order failure wrapper |
+-| `formula.compiler_requirement_unsatisfied` | `host formula compiler capability 1 does not satisfy >=2` / enable `[daemon] formula_v2` or choose a v1 formula | fatal stderr, exit 1; no beads created | HTTP 400 for validation/preview or 409 for launch conflict plus diagnostic body | disabled-capability state with remediation | registered compile-failure wrapper event |
+-| `formula.host_capability_invalid` | `invalid host formula compiler capability <value>` / construct host capabilities at the config edge | fatal stderr, exit 1 | HTTP 500 unless caused by request-local test input | internal error state with remediation | registered producer failure event |
+-| `formula.contract_deprecated` | `contract = "graph.v2" is deprecated` / use `[requires] formula_compiler = ">=2"` | bounded warning stderr by source/key | warning diagnostic in 200/preview response | non-blocking warning | none; warnings are never Event Bus payloads |
+-| `formula.version_deprecated` | `formula version is legacy metadata` / use pack version/ref/SHA for artifact identity | warning only on validate/show, never on launch success | warning diagnostic on formula endpoints | non-blocking warning | none |
++| Code | Diagnostic class | Canonical message/remediation | CLI | API | Dashboard | Events |
++|---|---|---|---|---|---|---|
++| `formula.requirement_unknown_axis` | author-fixable formula source | `unsupported [requires] key <key>` / remove it or upgrade to a binary that supports the axis | fatal stderr; validate/report exit 2; runtime launch exit 1 | HTTP 400 typed diagnostic | formula preview validation error | no event except controller/order failure wrapper |
++| `formula.requirement_invalid_type` | author-fixable formula source | `<key> must be a TOML string` / use `formula_compiler = ">=2"` | fatal stderr; validate/report exit 2; runtime launch exit 1 | HTTP 400 | formula preview validation error | no event except controller/order failure wrapper |
++| `formula.compiler_requirement_invalid_syntax` | author-fixable formula source | `invalid formula compiler requirement <value>` / use omitted, `>=1`, or `>=2` exactly | fatal stderr; validate/report exit 2; runtime launch exit 1 | HTTP 400 | formula preview validation error | no event except controller/order failure wrapper |
++| `formula.compiler_requirement_unsupported_future` | author or binary-upgrade required | `formula compiler capability <N> is not supported by this binary` / upgrade Gas City or use `>=1` or `>=2` | fatal stderr; validate/report exit 2; runtime launch exit 1 | HTTP 400 | formula preview validation error | no event except controller/order failure wrapper |
++| `formula.compiler_requirement_unsupported` | author-fixable legacy source | `unsupported legacy formula contract <value>` / use `[requires] formula_compiler = ">=2"` | fatal stderr; validate/report exit 2; runtime launch exit 1 | HTTP 400 | formula preview validation error | no event except controller/order failure wrapper |
++| `formula.compiler_requirement_conflict` | author-fixable formula source | `contract and [requires] disagree` / make both declare graph v2 or remove `contract` | fatal stderr; validate/report exit 2; runtime launch exit 1 | HTTP 400 | formula preview validation error | no event except controller/order failure wrapper |
++| `formula.compiler_requirement_missing` | author-fixable formula source | `v2-only construct requires formula_compiler = ">=2"` / add `[requires] formula_compiler = ">=2"` | fatal stderr; validate/report exit 2; runtime launch exit 1 | HTTP 400 | formula preview validation error | no event except controller/order failure wrapper |
++| `formula.compiler_requirement_unsatisfied` | operator-fixable host capability | `host formula compiler capability 1 does not satisfy >=2` / enable `[daemon] formula_v2` or choose a v1 formula | fatal stderr with host source; validate/report exit 2; runtime launch exit 1; no beads created | HTTP 400 for validation/preview or 409 for launch conflict plus diagnostic body | disabled-capability state with remediation | registered compile-failure wrapper event |
++| `formula.host_capability_invalid` | internal configuration bug | `invalid host formula compiler capability <value>` / construct host capabilities at the config edge | fatal stderr, exit 1 | HTTP 500 unless caused by request-local test input | internal error state with remediation | registered producer failure event |
++| `formula.contract_deprecated` | warning | `contract = "graph.v2" is deprecated` / use `[requires] formula_compiler = ">=2"` | bounded warning stderr by source/key; exit unchanged | warning diagnostic in 200/preview response | non-blocking warning | none; warnings are never Event Bus payloads |
++| `formula.version_deprecated` | warning | `formula version is legacy metadata` / use pack version/ref/SHA for artifact identity | warning only on validate/show, never on launch success; exit unchanged | warning diagnostic on formula endpoints | non-blocking warning | none |
+ 
+ Projection rules:
+ 
+@@ -2004,6 +2071,14 @@
+     occurrence_count: 1
+ ```
+ 
++The `disabled-v2-host` fixture is a single source of truth. Direct CLI stderr,
++CLI exit code, API-routed CLI output, Huma JSON, generated TypeScript fixture,
++dashboard state, and `order.formula_compile_failed` payload are all generated
++or asserted from this one fixture. A change that updates only one surface is a
++test failure. Byte normalization is limited to path separators and timestamps;
++codes, source keys, source values, remediation, host provenance, HTTP status,
++CLI exit class, and event payload fields must match exactly.
++
+ The golden tests compare direct CLI, API-routed CLI, Huma response bodies,
+ generated TypeScript fixtures, dashboard rendering state, and event payloads.
+ Every projection must preserve `Code`, canonical message, remediation, primary
+@@ -2090,6 +2165,10 @@
+ | `gc.formula_pack_source` | local path, git URL, registry source, or `builtin` |
+ | `gc.formula_pack_ref` | requested tag, branch, semver, or SHA when known |
+ | `gc.formula_pack_revision` | locked revision or content hash used for compilation |
++| `gc.formula_import_binding` | winning direct import binding name when the formula came from an import |
++| `gc.formula_import_binding_path` | author-editable TOML path such as `[imports.review]` |
++| `gc.formula_parent_binding` | parent binding path for transitive imports, when applicable |
++| `gc.formula_lockfile_key` | lockfile entry key that resolved the pack revision, when applicable |
+ | `gc.formula_reproducibility` | `pinned`, `local-dirty`, `local-clean`, or `local-not-reproducibly-pinned` |
+ | `gc.formula_compile_artifact` | durable path or bead id for the compile result/provenance snapshot when the metadata would exceed practical size |
+ 
+@@ -2274,6 +2353,42 @@
+ | transitive import without lock entry | non-reproducible diagnostic that names the parent import chain |
+ | conflicting transitive refs for the same source | fail validation unless the lockfile has a single resolved revision and both parents record the collision |
+ 
++<!-- REVIEW: added per attempt-50-pack-acquisition-contract -->
++
++`gc formula validate --pack-source <url> --ref <ref> --all --json` has
++read-only acquisition semantics:
++
++| Concern | Contract |
++|---|---|
++| Fetch target | clone or fetch into a command-owned temporary checkout under the runtime temp directory, not into the city's installed-pack cache |
++| Lifetime | remove the temp checkout after the command unless `--keep-temp` is an explicit debug flag that prints the path |
++| Cache mutation | never mutate `packs.lock`, installed-pack cache, city config, beads, or workflow-root metadata |
++| Credentials | use existing non-interactive git credential configuration only; never prompt; auth failures return exit `1` with a typed acquisition diagnostic |
++| Network/offline | `--offline` forbids network access and succeeds only when an immutable lock/cache entry is already available; otherwise it reports `pack.acquisition_offline_unavailable` |
++| Mutable refs | branch and tag refs are marked non-reproducible unless a lock entry records the resolved immutable revision and content hash |
++| SHA refs | accepted as reproducible only when the fetched object exists and the content hash is recorded in the report |
++| Prior imports | direct and transitive imports are resolved through packman before formula selection; missing lock entries become reproducibility diagnostics with parent binding identity |
++| Failure diagnostics | acquisition failures are pack diagnostics, not formula diagnostics, and include source URL, requested ref, binding path, parent binding, credential mode, offline mode, and remediation |
++
++`[pack] requires_gc` is parsed before formula files in that pack are selected.
++The v0 grammar is a TOML string of the form `">=<semver>"`, where `<semver>`
++is `MAJOR.MINOR.PATCH` with optional prerelease/build suffix accepted only if
++the existing Gas City version parser already accepts it. Integers, booleans,
++arrays, inline tables, missing operator, bare versions, `">= 1.2.3"`, leading
++or trailing whitespace, and unknown pack compatibility keys are invalid. The
++active binary version is read once at resolver startup; if
++`requires_gc` exceeds it, resolver/import loading fails closed before staging,
++shadow resolution, formula compile, or durable writes.
++
++Pack-floor remediation is required when a formula compiler requirement exceeds
++what the active binary can support. The validation report must include
++`formula.migration.raise_pack_requires_gc` with the pack binding path, current
++floor, required floor from `formula-compiler-min-floor.json`, winning formula,
++and every shadowed formula that would become invalid if it won. Fixtures must
++cover built-in, local clean, local dirty, git SHA, git branch/tag, registry,
++direct import, transitive import, duplicate binding, aliased transitive import,
++and shadowed-winner cases.
++
+ `--requirement-diff old.lock new.lock` compares lockfile entries by pack name,
+ binding name, binding path, source, requested ref or version constraint,
+ locked revision, content hash when available, `requires_gc`, transitive parent
+@@ -2355,8 +2470,12 @@
+   "recommended": "[requires]\\nformula_compiler = \">=2\"",
+   "first_party": false,
+   "pack": "acme",
++  "binding_name": "review",
++  "binding_path": "[imports.review]",
++  "parent_binding": "",
+   "requested_ref": "v1.2.3",
+   "locked_revision": "abc123",
++  "lockfile_key": "https://example.com/acme.git",
+   "requires_gc_floor": ">=<minimum-floor>",
+   "safe_automatic_edit": true
+ }
+@@ -2378,6 +2497,26 @@
+ future `--apply` command needs a separate design with backups, dry-run output,
+ conflict detection, and author confirmation rules.
+ 
++<!-- REVIEW: added per attempt-50-binding-aware-migration-output -->
++
++Binding identity is mandatory on every external-pack remediation surface. The
++stable JSON schema for validation, `migration_hints`, requirement diffs,
++persisted compile artifacts, and any root metadata that points at a consumed
++external pack must include `binding_name`, `binding_path`, `parent_binding`,
++`lockfile_key`, `requested_ref`, `locked_revision`, and `content_hash` when
++available. If a field is unavailable because the current lockfile schema cannot
++prove it, the report emits a diagnostic instead of omitting the field silently.
++
++Required binding fixtures:
++
++| Fixture | Required assertion |
++|---|---|
++| duplicate direct bindings to the same source | diagnostics name both `[imports.<binding>]` paths and the lockfile key |
++| aliased transitive import | migration hint names the parent binding and the child binding that must be edited |
++| shadowed winner | report names winning and losing binding paths, layer priorities, and which binding would change remediation |
++| pinned external SHA | hint names the immutable SHA, content hash, and whether republish or consumer lockfile update is required |
++| pack-floor bump | requirement diff names the formula requirement delta and the `[pack] requires_gc` edit in the owning pack |
++
+ Operational meaning of reproducibility values:
+ 
+ | Value | Meaning | Policy effect |
+@@ -2484,6 +2623,13 @@
+ 7. Diagnostics: stable code table, CLI/API/dashboard projection, and
+    remediation wording.
+ 
++The rewrite is accepted only when a reader can answer, from that document
++alone, which field a formula author edits, which field a pack author edits,
++which field an operator edits, what exit/status to expect for a disabled host,
++and why formula `version` is not the migration mechanism. Every TOML snippet in
++that file must parse in a fixture or be explicitly marked invalid with the
++expected diagnostic code.
++
+ The docs bundle must include these exact TOML snippets:
+ 
+ ```toml
+@@ -2570,9 +2716,15 @@
+ schema_version: 1
+ owner: release-captain
+ path_globs:
++  - README.md
++  - AGENTS.md
++  - TESTING.md
++  - docs/**/*.md
+   - docs/reference/**/*.md
+   - docs/guides/**/*.md
++  - docs/tutorials/**/*.md
+   - docs/packv2/**/*.md
++  - engdocs/**/*.md
+   - engdocs/architecture/**/*.md
+   - engdocs/proposals/formula-migration.md
+   - examples/**/*.toml
+@@ -2584,8 +2736,11 @@
+     pattern: 'contract = "graph.v2"'
+     allow_only_with: ['deprecated', 'legacy', 'migration', 'alias-window']
+   - id: formula-version-selector
+-    pattern: 'version = 2'
+-    allow_only_with: ['legacy metadata', 'not a compiler selector']
++    pattern: 'version'
++    allow_only_with: ['legacy metadata', 'not semver', 'not a compiler selector', 'pack version/ref/SHA']
++  - id: native-formula-production-rollback
++    pattern: 'GC_NATIVE_FORMULA=false'
++    allow_only_with: ['validation-only probe', 'not a production runtime fallback', 'superseded']
+   - id: compiler-selector-wording
+     pattern: 'selects the compiler'
+     allow_only_with: ['does not select']
+@@ -2764,6 +2919,45 @@
+ }
+ ```
+ 
++<!-- REVIEW: added per attempt-50-convergence-projection-contract -->
++
++`internal/formula` also owns the generic convergence projection data after raw
++decode, inheritance, expansion/aspect contribution, runtime-var defaulting, and
++accepted artifact validation. It does not own convergence policy, but it is the
++only package that can say where these fields came from:
++
++```go
++type CompiledConvergenceProjection struct {
++    Enabled            SourceValue[bool]
++    RequiredVars       []CompiledRuntimeVar
++    EvaluatePrompt     SourceValue[string]
++    EvaluatePromptPath SourceValue[string]
++    RelevantStep       SourceValue[string]
++    Retry              *CompiledRetryPolicy
++    SourceFormula      string
++    SourcePath         string
++}
++```
++
++The projection rules are fixture-locked:
++
++| Raw authored field | Compiler-owned output | Rule |
++|---|---|---|
++| root, child, loop body, expansion, aspect, or import convergence enablement | `Enabled` | inherited and overridden before projection; source attribution names the winning field |
++| `required_vars` and runtime var declarations | `RequiredVars` | merged after inheritance/defaulting; duplicates preserve deterministic diagnostic order |
++| inline `evaluate_prompt` | `EvaluatePrompt` | projected as content with source path/key/value |
++| prompt path | `EvaluatePromptPath` | projected as path only; readability is convergence-domain validation before writes |
++| selected output/relevant step | `RelevantStep` | selected from compiled steps after graph transforms, never by reopening TOML |
++| retry policy | `Retry` | projected from the accepted compiled step policy |
++
++Durable convergence, reconcile, missing-child repair, retry, next-iteration,
++and speculative-wisp paths pass an `AcceptedCompileArtifact` through
++`ProjectAcceptedFormula`. No durable convergence path may use preview
++`ProjectFormula` output. The sequence is strictly compile, accept, project,
++convergence-domain validate, then write; a failure at any earlier step leaves
++zero root, child, iteration, hook, dependency, convoy, artifact-ref, retry, or
++missing-child writes.
++
+ <!-- REVIEW: added per convergence-boundary -->
+ 
+ `internal/convergence/formula_projection.go` owns the projection API and
+@@ -2853,6 +3047,37 @@
+ diagnostic and writes no retry metadata, child, iteration, wisp, convoy, or
+ continuation state.
+ 
++<!-- REVIEW: added per attempt-50-active-root-recovery -->
++
++Unrecoverable active roots have an explicit controller/operator contract:
++
++| State | Automatic behavior | Operator repair path |
++|---|---|---|
++| accepted artifact present and supported | validate artifact and continue graph-specific writes that match the original identity, even after host downgrade | no repair needed; selecting a new formula still uses current host capability |
++| legacy-only root, source present, host enabled | pause graph-specific mutation until migration preflight succeeds | `gc formula repair-root-artifact <root-id> --dry-run --json`, then the same command without `--dry-run` stamps only the artifact ref and migration metadata |
++| legacy-only root, source missing | observation, status, and already-created bead completion only | restore the exact source/pack ref, upgrade to a binary that can read existing metadata, or abandon/close the root with an operator reason |
++| host downgraded before migration artifact exists | fail closed before artifact stamping or graph mutation | re-enable `[daemon] formula_v2`, upgrade/restore the host, or abandon the root |
++| future capability or unsupported artifact schema | observation and cleanup that does not synthesize graph semantics | upgrade Gas City; old binary must not re-stamp or reinterpret the root |
++
++Artifact repair is idempotent. A dry run reports the compile identity,
++diagnostics, provenance, binding identity, and exact metadata that would be
++stamped. The non-dry-run command writes only when compile, accept, projection,
++and write-intent validation all pass; if the root already has the same artifact
++ref, the command is a no-op. If it fails, it emits a typed diagnostic and
++writes no artifact ref, metadata, child, dependency, hook, convoy, retry, or
++iteration state.
++
++Abandonment is explicit operator action, not a compiler fallback. The operator
++may close or mark a root abandoned through existing bead/root lifecycle
++commands with a reason that references the diagnostic. The controller must not
++silently convert an unrecoverable graph root into a v1 workflow, synthesize
++missing source, or drop children to make progress.
++
++Cross-binary fixtures cover old and new binaries reading canonical-only,
++dual-stamped, legacy-only, missing-source, downgraded-host, and
++future-capability roots. The expected result for unsupported combinations is
++visibility plus stable remediation and zero graph-specific durable writes.
++
+ <!-- REVIEW: added per DR48-convergence-projection-identity -->
+ 
+ Convergence projection parity is fixture-locked against the accepted artifact.

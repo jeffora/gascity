@@ -1,0 +1,43 @@
+# Ingrid Holm
+
+**Persona verdict:** block
+
+**Sources:** Claude, Codex, DeepSeek V4 Flash
+
+**Consensus findings:**
+- [Blocker] The first-adopter path includes an unindexed all-session scan that is not named in the cost contract. Claude and DeepSeek both call out `resolveLiveSessionByPathAlias` in `internal/api/session_resolution.go`, which scans all session beads by Title and can also sit on background message/nudge delivery paths. Codex independently finds the cost gate too vague to prevent unbounded hot-path reads. The design must index, remove, or explicitly budget this path before delegation.
+- [Blocker] Pure classifier/decider extraction lacks a trace-emission invariant. Claude and DeepSeek agree that side-effect-free deciders cannot trace themselves, so adapters must preserve former `gc trace` site/reason/outcome emission from structured diagnostic output. Codex requires `DIAGNOSTICS_MANIFEST.yaml` to map new diagnostics into existing trace records and renderers. Without this, the "why" behind blocked, rejected, selected, woken, or repaired decisions can disappear.
+- [Blocker] `DIAGNOSTICS_MANIFEST.yaml` is not specified enough to serve as an operability gate. Codex says a purpose row is insufficient without required fields, concrete states, renderers, source facts, budget IDs, and failure oracles. Claude notes the manifest and cost artifacts do not exist yet and must own trace mappings. DeepSeek supports the manifest approach but still requires concrete mappings and enforcement.
+- [Major] Read-path repair remains unsafe and under-owned. DeepSeek blocks on `RepairEmptyType` swallowing `store.Update` errors and patching the in-memory bead anyway; Claude identifies the same repair path as needing audited ownership, propagated persistence errors, and before/after trace evidence. This must be fixed or deferred before the first adopter preserves read-path behavior.
+- [Major] Diagnostic and reason codes can drift from the canonical operator vocabulary. Claude and DeepSeek both require classifier/decider `diagnostic_code` values to map to the existing blockers, wake causes, and identity projections in `REQUIREMENTS.md`; Codex similarly requires compatibility with current trace site/reason/outcome records and rollups.
+- [Major] Durable-scan, event fan-out, and reconciler hot-loop controls are named but not operationally specified. Codex requires trigger, query, cadence, cap, retry, idempotency, completion, duplicate, partial-query, and renderer fields. DeepSeek adds that repeated `bd` subprocess spawning in reconciler fact compilation needs explicit caps or batching. Claude says event ownership per slice remains unanswered.
+
+**Disagreements:**
+- Claude returns `approve-with-risks`; Codex and DeepSeek return `block`. My assessment is `block` because Claude's remaining risks overlap the blockers from the other two reviewers and are prerequisites for safe delegation.
+- Repair severity differs. Claude labels `RepairEmptyType` a minor explicit-callout gap because the ledger principle would fix it; DeepSeek treats it as a blocker because the current read path silently mutates and swallows persistence errors. My assessment: it is blocking for any first-adopter path that can trigger the repair; otherwise it must be isolated as a named deferred repair with a guard.
+- The acceptable path-alias remedy is open. Claude asks to name it as indexed or budgeted, Codex wants per-hot-path budget rows, and DeepSeek allows index, strict budget, or removal from Slice 1 scope. My assessment: any of those can work, but an unnamed all-session scan cannot be blessed by the classifier migration.
+- The diagnostic vocabulary strategy is unsettled. Codex asks whether Slice 0 extends existing reconciler trace vocabulary directly or introduces a translated session-diagnostic vocabulary; Claude and DeepSeek emphasize canonical requirements vocabulary. My assessment: a separate session vocabulary is acceptable only if `DIAGNOSTICS_MANIFEST.yaml` contains a checked compatibility mapping to canonical terms and existing trace rollups.
+- Event/recovery adequacy is weighted differently. Claude says the post-commit event framing is structurally sound; Codex says durable scans and subscriber fan-out still lack enough schema to diagnose recovery/load; DeepSeek focuses on hot-loop subprocess cost. My assessment: the event model direction is sound, but the operational ledger fields are required before event-affecting slices.
+
+**Missing evidence:**
+- A normative `DIAGNOSTICS_MANIFEST.yaml` schema with operation/check ID, owning slice, source surface, trace site/reason/outcome mapping, source facts, redaction keys, renderers, event relationships, test selectors, budget row ID, and failure oracle.
+- Concrete diagnostics rows for first-slice states such as selected, not-found, ambiguous, rejected, repair-needed, store-error, stale-fact, skipped-event, duplicate-event, and partial-query.
+- A large-city cost baseline for API query-side target classification and reconciler fact materialization, including fixture size, max store calls, max scanned rows, subprocess count, proof command, threshold, and regression owner.
+- A cost row specifically naming `resolveLiveSessionByPathAlias` and its Title/path all-session scan.
+- A compatibility table from new diagnostic fields to existing `gc trace` records, reason/outcome counts, dropped-record counts, slow-storage degradation, doctor/session-inspect renderers, and API/CLI renderers.
+- A statement that rejected and blocked results, not only selected results, are renderable in trace, doctor, conflicts, API, and CLI surfaces.
+- A repair ownership plan for `RepairEmptyType`, including whether read paths return `repair-needed` or call an audited owner, and proof that persistence errors are no longer swallowed.
+- Durable-scan ledger fields for critical convergence paths, including trigger predicate, query shape, cap, cadence, retry/backoff, idempotency key, completion marker, duplicate behavior, partial-query behavior, and trace/doctor rendering proof.
+- A per-slice owner for `session.*` lifecycle event emission after extraction.
+
+**Required changes:**
+- Add the minimum `DIAGNOSTICS_MANIFEST.yaml` schema to the design or Slice 0 contract: operation/check ID, owner slice, source surface, result kind, trace site/reason/outcome mapping, source facts, redaction keys, renderer surfaces, event relationships, test selectors, budget row ID, and failure oracle.
+- Require one concrete diagnostics row for each first-slice decision state: selected, not-found, ambiguous, rejected, repair-needed, store-error, stale-fact, skipped-event, duplicate-event, and partial-query.
+- Add an emission invariant: extracted side-effect-free classifiers and deciders keep former call sites as trace/decision emission sites, and adapters map structured diagnostic output to `gc trace` site/reason/outcome records with signal equivalent to or better than today.
+- Add a cost row for `resolveLiveSessionByPathAlias`; either replace it with indexed lookup, remove it from the first adopter's scope, or enforce measured large-city budgets covering store calls, scanned rows, subprocesses, fixture size, benchmark command, threshold, and owner.
+- Replace generic cost language with per-hot-path budget rows for target resolution and reconciler fact compilation, including query shape, maximum calls, maximum scanned rows or index proof, subprocess count, fixture size, proof command, regression threshold, and owner.
+- Fix or defer `RepairEmptyType`: route it through an audited repair owner with before/after trace and propagated persistence errors, or return `repair-needed` from read paths. Do not patch in-memory state after a failed persistence write.
+- Require every diagnostic and reason code to map to the canonical projection vocabulary from `REQUIREMENTS.md`; new terms need a manifest row and an explicit relationship to blockers, wake causes, identity projections, or existing trace records.
+- Add durable-scan ledger fields for critical convergence paths: owner, trigger predicate, query shape, cap, cadence, retry/backoff, idempotency key, completion marker, supersession or duplicate behavior, partial-query behavior, and trace/doctor rendering proof.
+- Define who emits `session.*` lifecycle events after extraction for wake, drain, close, stop, crash, quarantine, and runtime start slices, and record that owner per slice.
+- Prevent broad optional diagnostic envelopes from becoming a catch-all facade: first-slice candidate/result types should be typed by kind or otherwise constrained by manifest-backed fields and exact renderer tests.

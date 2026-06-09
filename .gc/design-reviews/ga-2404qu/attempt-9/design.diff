@@ -1,0 +1,337 @@
+--- .gc/design-reviews/ga-2404qu/attempt-9/design-before.md	2026-06-07 09:00:17.159845513 +0000
++++ .gc/design-review-inputs/core-gastown-pack-migration/design.md	2026-06-07 10:42:25.224450816 +0000
+@@ -7,7 +7,7 @@
+ requirements_file: /data/projects/gascity-fresh-main-20260604-VLKm8c/plans/core-gastown-pack-migration/requirements.md
+ status: draft
+ created_at: 2026-06-04T15:07:35Z
+-updated_at: 2026-06-07T08:30:24Z
++updated_at: 2026-06-07T10:41:04Z
+ ---
+ 
+ # Design: Core and Gastown Pack Split
+@@ -1120,6 +1120,325 @@
+ any required attempt-local persona synthesis is absent or has mismatched
+ `gc.attempt` metadata.
+ 
++### Attempt 9 Review Resolution Contracts
++<!-- REVIEW: added per attempt9-global-blockers -->
++
++Attempt 9 keeps the review verdict at `iterate` and turns the remaining review
++gaps into implementation gates. These contracts supersede any older wording that
++allows provenance-only Core proof, bundled/public Gastown overlap, retired pack
++fallback, ad hoc doctor writes, role-token-only scanning, weak behavior
++witnesses, production bootstrap escape hatches, late docs, or broad slice gates.
++
++#### Required-System-Pack Participation Contract
++<!-- REVIEW: added per attempt9-required-core-loading -->
++
++`RequiredSystemPackParticipation` is the only proof that required Core, `bd`,
++or `dolt` participated in a runtime load. The record is produced by one
++required-system-pack wrapper and contains:
++
++- required pack id, pack kind, binary build id, embedded source id, and content
++  manifest digest
++- strict expected file-set digest, `pack.toml` digest, and unexpected-file
++  classification
++- materialized directory, freshness/repair status, and pre-resolution
++  integrity diagnostic
++- resolved layer id, import edge id, and post-resolution participation
++  diagnostic for the same validated layer
++- collision result for same-name user packs, imported packs, lock entries,
++  synthetic aliases, and retired materialized directories
++- loader class: runtime, no-refresh runtime, partial edit, partial doctor, or
++  test-only fixture
++
++The wrapper has two fatal gates:
++
++1. Pre-resolution integrity: missing, stale, corrupt, partial, wrong-source,
++   wrong-digest, shadowed, same-name-colliding, or effective-extra-file Core
++   fails before any behavior-bearing config, formula, order, script, prompt, or
++   overlay can be read.
++2. Post-resolution participation: the final resolved config must contain a
++   typed participation record for the same validated host-system-pack layer.
++   Successful materialization, file reads, path matches, include counts, or
++   provenance strings are not enough.
++
++The bypass scanner is whole-production, not `cmd/gc`-only. It scans non-test Go
++under `cmd/gc` and production `internal/` packages that can drive config
++resolution or runtime behavior, including API/config helpers, controller reload,
++dispatch routing, session resolution, doctor/configedit after pre-resolution,
++import/check/install, packman, cache/lock validation, no-refresh loaders,
++convoy/sling/wait flows, Dolt publication, and helper packages called by those
++surfaces. Any direct `config.Load*` call in scope must either move to the
++wrapper or appear in a generated partial-read allowlist naming file, function,
++loader class, reason, fatality boundary, owner, expiry, and focused test.
++
++User, imported, synthetic, lock, or materialized retired entries named `core`
++are fatal collisions for runtime loads. They may be diagnosed or rewritten only
++by partial doctor/edit paths before full resolution; they cannot satisfy,
++replace, shadow, or patch around required host Core.
++
++#### Public Gastown Pin And Overlap Boundary
++<!-- REVIEW: added per attempt9-public-gastown-pin-overlap -->
++
++The chosen rollout model is a backward-compatible first public pin followed by
++an activation pin. Gas City may not consume a public Gastown pin that activates
++definitions already active from bundled Maintenance or in-tree Gastown under
++the current loader.
++
++The first public pin is the compatibility pin:
++
++- it resolves only through
++  `https://github.com/gastownhall/gascity-packs.git//gastown` at the immutable
++  commit named by `PublicGastownPackVersion`
++- registry-selector install, direct source resolution, lock generation, and
++  packcompat must prove the same reachable commit, subpath identity, and
++  manifest digest
++- historical synthetic aliases, embedded bytes, stale synthetic cache entries,
++  local fallback paths, and `.gc/system/packs/gastown` cannot satisfy this pin
++- behavior rows that would duplicate still-bundled Maintenance definitions are
++  present only as inactive compatibility assets or approved semantic deltas
++  until the no-Maintenance loader slice activates them
++
++The activation pin is consumed only after Core-owned Maintenance behavior has
++moved, Maintenance has been removed from required system packs, and
++no-Maintenance packcompat is green through the normal production loader. If the
++public pack cannot split compatibility and activation safely, the Gas City
++slice must use an atomic pin/removal boundary and cannot land a public pin while
++bundled Maintenance remains active.
++
++Duplicate active definitions are fatal in every intermediate and rollback
++state. Tests must cover current loader plus candidate pin, old `v1.2.1` binary
++plus new pin, new binary plus old pin, rollback after pin adoption, stale local
++imports, stale materialized system-pack directories, old synthetic cache, and
++ordinary remote cache. The duplicate matrix covers agents, patches, prompt
++fragments, prompts, formulas, base formulas, orders, scripts, hooks,
++notification targets, runtime-state owners, and moved helper dependencies.
++
++#### Retired-Source Classifier As The Sole Gate
++<!-- REVIEW: added per attempt9-retired-source-classifier -->
++
++Retired source handling is centralized before ordinary remote fallback or cache
++selection. Config load, pre-resolution doctor, import check/install, packman,
++cache reads, lock validation, builtin materialization, prompt/template
++discovery, hook/formula/order/script discovery, docs lint, generated-reference
++lint, and error rendering must call the same classifier API instead of using
++independent path tests or globs.
++
++The classifier returns typed states: active host system pack, active public
++pack, generated retired Maintenance, generated retired local Gastown,
++preserved stale system-pack directory, stale synthetic cache, legacy runtime
++state, custom local fork, historical/generated fixture, duplicate active
++definition, invalid Core collision, and unsupported transitive retired import.
++
++The no-Maintenance slice stops materializing, refreshing, pruning, importing,
++or loading retired Maintenance/Gastown directories. Existing directories are
++preserved and diagnosed; prompt/template/formula/order/script discovery walks
++only active resolved packs and required host packs. Tests must cover absent,
++stale, customized, explicit legacy import, custom fork, transitive import,
++stale prompt fragment, stale hook overlay, stale order/formula, and stale cache
++cases through production loaders and import/check/install paths.
++
++#### Doctor Mutation Coordinator And Commit Boundary
++<!-- REVIEW: added per attempt9-doctor-transaction-boundary -->
++
++All `gc doctor --fix` writes for this migration go through one mutation
++coordinator. Implementation beads may not add direct ad hoc
++`MaterializeBuiltinPacks(cityPath)` calls, path-only provenance checks,
++whole-file TOML rewrites, live multi-target mutation, or partial commits outside
++this coordinator.
++
++The coordinator has one operation-scoped preflight and one publish boundary:
++
++1. Read city manifests, rig manifests, lockfiles, installed-pack metadata,
++   runtime-state files, existing system-pack directories, and live-controller
++   runtime facts.
++2. Refuse automatic multi-file fixes when a controller for the same city is
++   running.
++3. Prove generated-source provenance for every local import removal/rewrite.
++4. Prove public Gastown reachability, exact commit installability, ordinary
++   remote cache identity, registry/direct-source equality, and lock generation.
++5. Stage Core and public Gastown content outside the live city and validate
++   strict required-pack manifests before touching user files.
++6. Plan runtime-state moves with conflict checks and reversible temporary names;
++   never delete legacy Maintenance state.
++7. Edit TOML and lockfiles with a CST/span-preserving editor. If comments,
++   unknown tables, unknown fields, array order, whitespace, lexical lockfile
++   precision, installed-pack metadata, or unrelated lock entries cannot be
++   preserved, automatic fix refuses with manual steps.
++8. Validate the staged overlay by running the normal production load, typed
++   participation gates, duplicate-definition checks, retired-source classifier,
++   and public Gastown pin proof.
++9. Publish only after validation, using compare-before-rename on every target.
++
++Before step 9, all live files must remain byte-identical. If any publish step
++fails, the error names the exact operation and any already-renamed file; the
++recovery instructions use the preserved original and staged temp paths rather
++than deleting stale state. Failure-injection tests cover controller-active
++cities, air-gapped repair, offline no-cache, failed public fetch, stale locks,
++partial writes, failed renames, mutation between preflight and rename, runtime
++state conflicts, final validation failure, repeated healthy no-op fixes, and
++downgrade after doctor fixes.
++
++#### Go And Asset Role-Surface Migration Table
++<!-- REVIEW: added per attempt9-role-surface-table -->
++
++Role neutrality is proved by a checked-in generated table plus scanner, not by
++a token scan alone. The canonical table is
++`plans/core-gastown-pack-migration/role-surface.generated.yaml`; the public
++Gastown companion table is
++`gastown/docs/role-surface.generated.yaml`. Each row contains file/asset,
++source span, current role-bearing behavior, final owner, replacement mechanism,
++rollout slice, proof test, allowlist class, owner, reason, and expiry.
++
++The final decisions are:
++
++- `dog`: Core maintenance-worker compatibility data. It is configurable pack
++  data, not an SDK primitive, and Go cannot require it for controller-owned
++  infrastructure. Core maintenance formulas resolve the configured worker name
++  or fail with a formula/config diagnostic.
++- `crew`: not an infrastructure role class. API/session output uses neutral
++  config-supplied grouping or session metadata; no Go branch may classify
++  `crew` as a special family.
++- tmux display identity: role display, icons, and themes are config-supplied
++  metadata or Gastown assets. Go APIs such as `DogTheme` are removed or wrapped
++  behind neutral compatibility data.
++- non-Gastown `gc init`: produces Core/provider infrastructure only. Gastown
++  roles, prompts, warmup recipients, and examples come only from the explicit
++  public Gastown import.
++- prompt fallback and generated help: Core fallbacks are role-neutral.
++  Mayor/Deacon/Witness/Polecat/Refinery/Boot/Crew/Gastown prose lives only in
++  public Gastown docs/assets or explicit historical fixtures.
++- warmup and Core mail/nudge targets: resolved from formula, order, pack, city,
++  or session metadata. Missing configured recipients mean no warmup/nudge, not
++  a hardcoded fallback.
++- sling branch and formula selection: driven by formula metadata or explicit
++  config, not role-name heuristics.
++
++Source deletion, Core asset movement, or role-bearing docs cleanup cannot
++proceed while any behavior row lacks a replacement mechanism and proof test.
++The scanner covers Go identifiers and string literals, TOML, shell, Markdown,
++templates, generated CLI help, comments/prose, prompts, scripts, descriptions,
++metadata, Core assets, examples, and tests. Allowlist rows must be narrow,
++owned, justified, expiring, and covered by negative fixtures that prove a
++behavior-bearing role branch fails CI.
++
++#### Behavior Evidence Witness Floor
++<!-- REVIEW: added per attempt9-behavior-witness-floor -->
++
++The behavior manifest cannot downgrade evidence. If old behavior had
++execution-level evidence, the final row must have execution-level evidence for
++the replacement or an approved semantic-delta/removal record. Source existence,
++path moves, include counts, or rendered docs are insufficient replacements for
++old execution tests.
++
++The generator discovers behavior across the whole Gas City repo and the pinned
++public Gastown checkout, including requester, detector, notification, mail,
++nudge, route metadata, prompt instructions, scripts, commands, doctor checks,
++authorship identity, provider safety/database filters, session hooks such as
++`session_live`, dog-field ownership, runtime-state mutation, duplicated
++exec/formula paths, and public-pack docs/comments. Each row is per behavior and
++per code path when behavior has multiple execution paths.
++
++Every non-equivalent row needs a semantic-delta record with owner, rationale,
++operator impact, replacement, release note requirement, and approval status.
++`test/packcompat` executes behavioral-trigger fixtures against the exact public
++Gastown commit consumed by Gas City and verifies the manifest digest through
++the same checkout/cache path used for pack installation.
++
++#### Bootstrap Escape Hatch Final Decision
++<!-- REVIEW: added per attempt9-bootstrap-decision -->
++
++`GC_BOOTSTRAP=skip` is retired as a production behavior switch. Production
++commands must ignore it for required-system-pack operations or emit a
++deprecation diagnostic, but it cannot skip bootstrap fixture setup, Core
++materialization, provider-pack materialization, strict integrity validation,
++retired-source classification, collision checks, post-load participation, or
++doctor cleanup. Any remaining branch that changes production config behavior
++based on `GC_BOOTSTRAP=skip` must be deleted in the Core extraction slice.
++
++Production `bootstrapAssets` is a private non-nil empty `fs.FS` whose `Open`
++returns `fs.ErrNotExist`. Test fixtures are `_test.go`-only inline
++`fstest.MapFS` definitions with this exact allowlist: `pack.toml`, one minimal
++agent table when required by the test, and no production-only `formulas/`,
++`orders/`, `overlay/`, `skills/`, `assets/prompts/`, scripts, or copied
++`internal/packs/core` content. Tests must fail on production imports of
++`internal/bootstrap/packs/core`, copied/hardlinked production Core fixtures,
++`AssetDir: "packs/core"` outside the fixture allowlist, nil `bootstrapAssets`,
++empty-embed leakage into production, and hook overlays resolving from the old
++bootstrap Core path.
++
++#### Docs And Operator Vocabulary First-Slice Gate
++<!-- REVIEW: added per attempt9-docs-wording-gate -->
++
++`docs/reference/system-packs.md` is the canonical system-pack reference and is
++registered in docs navigation in the first slice that changes
++operator-facing behavior. No substitute page is allowed unless this design is
++edited to name the exact path and the docs-nav test enforces that path before
++implementation starts.
++
++The wording matrix is generated from
++`plans/core-gastown-pack-migration/system-pack-wording.generated.yaml` and the
++pinned public Gastown companion artifact. It has schema version, owners,
++allowed contexts, forbidden contexts, exact recommended phrases, consumers, and
++golden-test ids. It covers Core, provider host packs, explicit public Gastown,
++retired Maintenance, stale system-pack directories, runtime-state migration,
++host-Core patching, version skew, store/Dolt maintenance terminology,
++Core-maintenance-worker terminology, public-pack comments, and generated
++schema/reference text.
++
++Docs lint is manifest-derived and covers Markdown/MDX, TOML, Go strings,
++shell, generated references, docs navigation, CLI help, doctor JSON/text
++strings, examples, scripts, pack comments, public-pack docs, moved asset names,
++retired paths, and troubleshooting. A slice that changes operator-facing
++behavior without docs, wording matrix, golden output, generated references, and
++navigation updates is explicitly non-release and cannot be the release branch.
++
++#### Slice Gates And Compatibility Fixtures
++<!-- REVIEW: added per attempt9-slice-gate-specificity -->
++
++Every high-risk slice has a machine-checkable green state. Broad suite names
++are not enough; each slice must name the exact package targets, packcompat mode,
++process/integration shard, old/new binary fixture, offline/cache fixture, and
++post-deletion stale-path scan it owns.
++
++Compatibility fixtures use:
++
++- old binary: `v1.2.1`
++- new binary: the migration branch build under test
++- compatibility pin: the first public Gastown pin consumed while Maintenance is
++  still active
++- activation pin: the public Gastown pin consumed after no-Maintenance
++  production loading is green
++- cache states: offline no-cache, ordinary remote cache hit, old synthetic
++  cache present, stale generated system-pack directory present, and air-gapped
++  repair
++
++The slice gate matrix includes:
++
++| Slice | Additional required gates |
++| --- | --- |
++| public compatibility pin | ordinary remote install, registry/direct hash equality, current-loader zero-duplicate matrix, old `v1.2.1` binary plus compatibility pin, stale synthetic cache ignored, docs marked non-release if wording not updated. |
++| Core extraction | `go test ./internal/builtinpacks ./internal/hooks ./internal/bootstrap ./internal/config`, bootstrap fixture guards, old-path scan, `GC_BOOTSTRAP=skip` production-branch deletion/diagnostic test. |
++| Core loading/doctor | whole-production loader scanner, API/controller/no-refresh/session/dispatch/import/check/install bypass tests, doctor CST preservation, staged overlay validation, controller-active refusal, failure-injection suite. |
++| Maintenance folding | no-Maintenance production-loader packcompat, zero duplicate active definitions, runtime-state migration/conflict tests, stale directory preservation, provider `bd`/`dolt` byte/provenance continuity. |
++| registry/cache cleanup | public synthetic alias retirement, source-plus-version repo cache key, old synthetic cache rejection, public pin remote-cache digest check, bundled Core/`bd`/`dolt` validation. |
++| source deletion/docs | generated behavior and role table completeness, old-test to new-test mapping, docs wording lint/goldens/navigation, post-deletion stale-path scan, public-import wiring tests. |
++
++Rollback and one-way boundaries are executable. Doctor-mutated manifests must
++remain readable by `v1.2.1` unless the release notes name the exact one-way
++boundary and manual recovery steps. Runtime-state moves are one-way for new
++binaries; rollback guidance must say old binaries may continue reading legacy
++Maintenance state until the operator manually moves Core state back.
++
++#### Workflow Artifact Guard Follow-Up
++<!-- REVIEW: added per attempt9-workflow-artifact-guard -->
++
++The attempt-local persona-synthesis path issue is not a Core/Gastown migration
++requirement, but it remains a required workflow follow-up. The design-review
++workflow must write persona syntheses to
++`.gc/design-reviews/<source-bead>/attempt-<N>/persona-syntheses/`, stamp every
++artifact with `gc.attempt=N`, and fail global synthesis before review if any
++required persona synthesis is absent from the current attempt directory or has
++mismatched attempt metadata.
++
+ ## Current System
+ 
+ `internal/builtinpacks/registry.go` defines the embedded pack set:

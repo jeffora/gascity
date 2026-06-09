@@ -1,0 +1,18 @@
+--- .gc/design-reviews/ga-j195cx/attempt-100/design-before.md	2026-05-12 12:09:52.397394445 +0000
++++ engdocs/design/formula-compiler-requirements.md	2026-05-12 12:17:24.731277928 +0000
+@@ -73,6 +73,15 @@
+ content hash, and the actual persona-synthesis directory; it may not silently
+ fall back to a context file.
+ 
++<!-- REVIEW: added per attempt-100-missing-synthesis -->
++
++If the current design-review attempt does not produce `synthesis.md`, the apply
++step may not infer a new verdict from persona inventory, `gc.output_json`, or
++source-bead status alone. It must carry forward the last valid synthesis path
++and verdict, record the missing current synthesis in the apply summary, and keep
++`design_review.workflow_status=iterating` until a real global synthesis is
++written.
++
+ Attempt 94 review closure is binding on the implementation plan:
+ 
+ | Review finding | Binding contract |

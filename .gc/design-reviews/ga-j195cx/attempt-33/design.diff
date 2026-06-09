@@ -1,0 +1,458 @@
+--- .gc/design-reviews/ga-j195cx/attempt-33/design-before.md	2026-05-10 20:45:58.685814158 +0000
++++ engdocs/design/formula-compiler-requirements.md	2026-05-10 21:33:11.723860738 +0000
+@@ -349,17 +349,36 @@
+       diagnostic_count: 1
+ ```
+ 
+-The generator expands this dimension table and fails if any supported
+-combination lacks an explicit row, an explicit `unsupported` reason, or an
+-explicit `impossible` reason. Complete coverage is required for accepted and
+-rejected strings, every non-string TOML/JSON value kind, duplicate or invalid
+-TOML shapes, legacy `contract`, legacy `version`, dual declarations, invalid
+-host capability, construct identity, construct location, contribution path,
+-caller path, inherited inline children, expansion/aspect/transitive-import
+-contributions, normalized output, JSON pointer/TOML source attribution, and
+-diagnostic order/count. A reviewer must be able to add a new requirement axis
+-or v2-only construct and see exactly which matrix rows, diagnostic fixtures,
+-docs rows, and tests must change.
++<!-- REVIEW: added per DR33-validation-matrix-bounded -->
++
++The generator does not expand the full cross-product. The `dimensions` block is
++the vocabulary, while executable suites select bounded combinations with named
++coverage intent. CI locks the generated case count for each suite; adding a
++requirement axis, construct, raw shape, or caller path must either add cases to
++the owning suite with an updated count or declare a checked `unsupported` or
++`impossible` row. This keeps the matrix auditable instead of turning it into an
++unreviewable product of every dimension.
++
++Normative suites:
++
++| Suite | Covers | Count lock |
++|---|---|---|
++| `grammar` | omitted, empty, accepted byte-exact strings, rejected strings, unsupported future `>=3`, and invalid host capability | exact generated rows plus golden diagnostic order/count |
++| `raw-shape` | TOML duplicate table, duplicate scalar key, dotted table, nested table, inline table, array, bool, integer, float, parser-boundary failures, and JSON equivalents | exact generated rows with TOML source position or JSON pointer expectations |
++| `legacy-alias` | legacy `contract`, dual declarations, conflicts, unsupported contract values, legacy `version`, and warning placement | exact generated rows and warning/fatal precedence |
++| `construct-registry` | every v2-only construct identity and decoded-field classification | at least one positive and one missing-requirement row per registry entry |
++| `contribution-traversal` | root, child, loop body, inline expansion, compose expansion/map, aspect, and transitive import propagation | pairwise rows across construct location and contribution path |
++| `caller-preflight` | validate/show previews plus every durable writer path | one fatal row per durable writer proving zero writes |
++| `projection-parity` | CLI, API, API-routed CLI, dashboard, and Event Bus projections | golden rows for diagnostic field preservation, ordering, and count |
++
++The raw-shape suite is the only owner of parser-boundary behavior. Duplicate
++TOML tables or scalar keys that the TOML library rejects remain plain parser
++errors with no structured formula diagnostic. Valid TOML/JSON values with the
++wrong decoded shape become structured formula diagnostics. JSON cases use JSON
++pointers as source keys and must be paired with the nearest TOML equivalent.
++A reviewer must be able to add a new requirement axis or v2-only construct and
++see exactly which suite counts, diagnostic fixtures, docs rows, and tests must
++change.
+ 
+ <!-- REVIEW: added per validation-matrix-independent-dimensions -->
+ 
+@@ -633,6 +652,7 @@
+ func CompileWithResult(ctx context.Context, name string, searchPaths []string, opts CompileOptions) (*CompileResult, error)
+ func CheckRequirements(req NormalizedRequirements, host HostCapabilities) []Diagnostic
+ func AcceptCompileResult(result *CompileResult, identity CompileIdentity) (AcceptedCompileArtifact, []Diagnostic)
++func ValidateAcceptedArtifact(artifact AcceptedCompileArtifact, intent CompileWriteIntent) []Diagnostic
+ func HostCapabilitiesFromFormulaV2(enabled bool, source string) HostCapabilities
+ func RootMetadataFacts(metadata map[string]string) (RootMetadataFacts, []Diagnostic)
+ ```
+@@ -667,6 +687,26 @@
+ Required `internal/sourceworkflow` APIs:
+ 
+ ```go
++type WorkflowRootCapabilityKind string
++
++const (
++    WorkflowRootNotWorkflow       WorkflowRootCapabilityKind = "not_workflow"
++    WorkflowRootDefaultCapability WorkflowRootCapabilityKind = "default_capability_workflow"
++    WorkflowRootKnownGraph        WorkflowRootCapabilityKind = "known_graph_workflow"
++    WorkflowRootUnknownFuture     WorkflowRootCapabilityKind = "unknown_future_capability_workflow"
++)
++
++type WorkflowRootFacts struct {
++    Kind                WorkflowRootCapabilityKind
++    FormulaName         string
++    CompilerCapability  int
++    Requirement         string
++    RequirementSource   string
++    ArtifactRef         string
++    Diagnostics         []formula.Diagnostic
++}
++
++func WorkflowRootFacts(metadata map[string]string) WorkflowRootFacts
+ func IsWorkflowRootMetadata(metadata map[string]string) bool
+ func IsGraphWorkflowMetadata(metadata map[string]string) bool
+ func WorkflowRootQuery(kind WorkflowRootKind, source SourceWorkflowScope) beads.ListQuery
+@@ -679,6 +719,17 @@
+ all callers. New packages may not create a successor owner without first
+ deleting or moving the old one in the same change.
+ 
++<!-- REVIEW: added per DR33-typed-root-facts -->
++
++Boolean predicates are compatibility helpers over `WorkflowRootFacts`, not the
++primary model. Callers that need behavior choose from the typed kind:
++non-workflow, default-capability workflow, known graph workflow, or unknown
++future capability workflow. Old binaries that see valid canonical workflow
++metadata with an unsupported compiler capability classify it as
++`unknown_future_capability_workflow`, keep it visible for observation and
++operator cleanup, and refuse to perform graph-specific child, fanout,
++continuation, retry, or new-compile behavior they do not understand.
++
+ The query helper must expose typed criteria for all persistence scans that
+ currently need workflow roots: any workflow root, graph workflow roots,
+ canonical-only roots, legacy-only roots during the alias window, and roots that
+@@ -707,6 +758,7 @@
+ | `internal/molecule` cook/cook-on/attach and graph apply | Root metadata can be stamped from raw contract or preview result | Stamp from `AcceptedCompileArtifact` only |
+ | `cmd/gc/cmd_sling.go` and `internal/sling` routing helpers | Graph routing and workflow attachment can branch on `gc.formula_contract` | Use shared workflow-root predicates backed by normalized metadata |
+ | `cmd/gc/cmd_order.go` and `cmd/gc/order_dispatch.go` | Order wisps can emit divergent errors | Preflight and accept a compile artifact; emit the shared diagnostic event on failure |
++| `cmd/gc` helpers that shell out to `bd` or legacy formula probes | Shell-out output can bypass typed compiler diagnostics and durable preflight | Treat shell-outs as validation-only probes; no shell-out result may authorize root, child, hook, convoy, retry, or fanout writes |
+ | `internal/dispatch/fanout.go` and fanout expansion fragments | Runtime fragment compilation can happen after a durable root exists | Compile each fragment through `CompileWithResult` before fanout writes any child, convoy, or continuation metadata |
+ | `cmd/gc/cmd_convoy_dispatch.go` and convoy cleanup | Graph-only roots can be discovered by legacy metadata only | Use shared workflow-root predicate that accepts new and legacy metadata during migration |
+ | `internal/api` workflow-root read models | Duplicate predicates can diverge from CLI/sourceworkflow scans | Use `internal/sourceworkflow.WorkflowRootQuery` and typed facts for every workflow-root API projection |
+@@ -728,6 +780,7 @@
+ | `internal/sling.isGraphSlingFormula`, `validateSlingFormulaRuntimeVars`, `AttachFormula`, `LaunchFormula` | One preflight returning `AcceptedCompileArtifact`; use `GraphWorkflow` and shared diagnostics for conflict and runtime-var paths | CLI and `internal/sling` tests for enabled, disabled, force replacement, and no partial root on unsatisfied host |
+ | `cmd/gc/cmd_sling.go` graph decoration | Use accepted artifact provenance and canonical workflow-root metadata before route decoration | Existing graph sling tests updated to assert canonical metadata and no raw-contract branch |
+ | `cmd/gc/cmd_order.go` and `cmd/gc/order_dispatch.go` formula order cook | Preflight and accept artifact; emit one registered failure event on fatal diagnostics; continue later orders | Order tests for unsatisfied host, deprecation warning suppression, and successful later order |
++| `cmd/gc` or internal helpers invoking `bd` for formula behavior | Remove from runtime authorization path; keep only explicit release-validation probes with typed native parity | static guard fails on durable writer paths that consume shell-out output; probe tests are non-interactive and validation-only |
+ | `internal/dispatch/fanout.go`: `CompileExpansionFragment` and any continuation fanout helper | Accept a parent artifact and compile/accept fragment formulas through the same host snapshot before durable fanout writes | Fanout tests prove disabled host capability creates zero child beads, convoys, continuation beads, or metadata |
+ | `cmd/gc/cmd_convoy_dispatch.go` source-workflow scans | Use `internal/sourceworkflow.IsWorkflowRoot` backed by canonical metadata first, legacy fallback second | Convoy tests with canonical-only, legacy-only, dual-stamped, and mixed-store roots |
+ | `internal/sourceworkflow.IsWorkflowRoot` and `ListLiveRoots` | Keep `internal/sourceworkflow` as the sole persistence predicate that calls formula metadata helpers | Predicate parity tests shared by sling, convoy, API, and dispatch |
+@@ -750,8 +803,9 @@
+ targeted searches for `CompileWithoutRuntimeVarValidation`,
+ `CompileExpansionFragment`, `SetFormulaV2Enabled`, `IsFormulaV2Enabled`,
+ `gc.formula_contract`, `contract = "graph.v2"`, `ValidateForConvergence`,
+-`molecule.Cook`, `molecule.Attach`, `GraphWorkflow`, and workflow-root metadata
+-filters. Each row names the owner package, current helper, durable-write
++`molecule.Cook`, `molecule.Attach`, `GraphWorkflow`, `gc.fanout_state`,
++`exec.Command("bd"`, and workflow-root metadata filters. Each row names the
++owner package, current helper, durable-write
+ ability, migration target, and blocking test. At minimum it contains these
+ rows:
+ 
+@@ -763,6 +817,7 @@
+ | sling launch | `internal/sling.InstantiateSlingFormula`, `cmd/gc/cmd_sling.go` | yes | no partial root/child/hook on unsatisfied host |
+ | graph attachment predicate | `internal/sling.IsGraphWorkflowAttachment` | reads durable metadata | shared `internal/sourceworkflow` predicate parity test |
+ | order cook | `cmd/gc/cmd_order.go`, `cmd/gc/order_dispatch.go` | yes | grouped event and successful-later-order tests |
++| durable shell-out bridge | any `bd` or legacy formula probe invocation reachable from launch/order/fanout/convergence | yes if it authorizes writes | validation-only probe or deletion plus static guard |
+ | fanout fragment | `internal/formula.CompileExpansionFragment`, `internal/dispatch/fanout.go` | yes | compile all fragments before first fragment write |
+ | convergence subset | `internal/convergence/formula.go:ValidateForConvergence` and create/retry callers | yes | projection and artifact-reuse tests |
+ | API sling/formulas | `internal/api/handler_sling.go`, `handler_formulas.go` | launch yes, preview no | typed Huma diagnostic and OpenAPI in-sync tests |
+@@ -824,18 +879,26 @@
+ 
+ | Entry point | Must complete before first durable write | Writes forbidden on fatal diagnostic |
+ |---|---|---|
+-| Root molecule or wisp launch | `CompileWithResult` plus `CheckRequirements` | root bead, child beads, root metadata, convoy, hook |
+-| Attached molecule | compile attached formula with current host capability | attached child bead, dependency, hook, attachment metadata |
+-| Formula-backed order | compile selected formula before marking the order fired | wisp root, child beads, order fired metadata |
+-| Retry or `on_complete` that starts a formula | compile target formula before retry/on-complete state mutation | retry-run bead, attached molecule, continuation metadata |
+-| Fanout fragment | compile every fragment formula before fragment expansion | fragment child beads, convoy links, continuation group metadata |
+-| Convergence create/retry/speculative wisp | canonical compile before convergence-specific validation writes | convergence root, iteration bead, missing-child state, retry metadata |
++| Root molecule or wisp launch | `CompileWithResult` -> `AcceptCompileResult` -> `ValidateAcceptedArtifact` | root bead, child beads, root metadata, convoy, hook |
++| Attached molecule | compile/accept attached formula with current host capability and validate artifact against attach intent | attached child bead, dependency, hook, attachment metadata |
++| Formula-backed order | compile/accept selected formula before marking the order fired | wisp root, child beads, order fired metadata |
++| Retry or `on_complete` that starts a formula | compile/accept target formula before retry/on-complete state mutation | retry-run bead, attached molecule, continuation metadata |
++| Fanout fragment | compile/accept every fragment formula in the fanout transaction and validate every artifact before fragment expansion | fragment child beads, convoy links, `gc.fanout_state`, continuation group metadata |
++| Convergence create/retry/speculative wisp | compile/accept before convergence-specific validation writes | convergence root, iteration bead, missing-child state, retry metadata |
+ 
+ No production path may accept a pre-parsed `NormalizedRequirements` argument
+ from a caller as proof of satisfaction. Passing a full `CompileResult` is
+ allowed only between formula package helpers and `AcceptCompileResult`; durable
+ writers must receive the accepted artifact.
+ 
++Fanout preflight is transactional. A fanout operation first compiles and
++accepts the parent and every selected fragment using the same host-capability
++snapshot, search-path hash, and vars/options identity. Only after every
++fragment has an accepted artifact may the dispatcher mutate `gc.fanout_state`,
++create fragment children, link convoys, or write continuation metadata. If any
++fragment fails, the whole fanout returns the shared diagnostic and leaves the
++store unchanged.
++
+ <!-- REVIEW: added per durable-artifact-identity-v21 -->
+ 
+ When a durable producer accepts a compiler-minted artifact before writing
+@@ -843,26 +906,63 @@
+ 
+ ```go
+ type AcceptedCompileArtifact struct {
+-    ArtifactVersion   int
+-    FormulaName       string
+-    HostCapabilities  HostCapabilities
++    artifactVersion   int
++    compileID         string
++    formulaName       string
++    hostCapabilities  HostCapabilities
++    searchPathsHash   string
++    optionsHash       string
++    varsHash          string
++    contentHash       string
++    provenance        Provenance
++    requirements      NormalizedRequirements
++    diagnostics       []Diagnostic
++    createdBy         string
++    createdAt         time.Time
++    proof             acceptedCompileProof
++}
++```
++
++<!-- REVIEW: added per DR33-accepted-artifact-proof -->
++
++The unexported `proof` field is intentional and is not a marker-only field:
++
++```go
++type acceptedCompileProof struct {
++    nonce        [16]byte
++    identityHash string
++    accepted     bool
++}
++```
++
++Code outside `internal/formula` cannot construct a non-zero accepted proof, and
++the zero value of `AcceptedCompileArtifact` is invalid. Durable writer entry
++points must call the formula-owned validation method before writing:
++
++```go
++type CompileWriteIntent struct {
++    HostCapabilities HostCapabilities
+     SearchPathsHash   string
+     OptionsHash       string
+     VarsHash          string
+-    Provenance        Provenance
+-    Requirements      NormalizedRequirements
+-    Diagnostics       []Diagnostic
+-    CreatedBy         string
+-    CreatedAt         time.Time
+-    seal              acceptedCompileSeal
++    ContentHash       string
++    DurableProducer   string
+ }
++
++func ValidateAcceptedArtifact(artifact AcceptedCompileArtifact, intent CompileWriteIntent) []Diagnostic
+ ```
+ 
+-The unexported `seal` field is intentional. Code outside `internal/formula`
+-cannot construct this value directly, and tests in other packages must obtain
+-one through test-only helpers that call the same acceptance checks. The only
+-exported readers on the artifact return copied values; no caller can mutate
+-requirements, diagnostics, provenance, or identity after acceptance.
++`ValidateAcceptedArtifact` fails closed when `proof.accepted` is false,
++the compile ID is empty, the proof identity hash does not match the stored
++identity fields, any fatal diagnostic is present, or the write intent disagrees
++with host capability, search paths, compile options, vars, content hash, or
++provenance. Callers may store and reload accepted artifacts only through
++formula-owned serialization that revalidates the proof identity against the
++persisted payload. They may not reconstruct an artifact from root metadata or
++a `CompileResult`.
++
++The only exported readers on the artifact return copied values; no caller can
++mutate requirements, diagnostics, provenance, or identity after acceptance.
+ 
+ `SearchPathsHash` covers the ordered formula search path after pack/import
+ resolution. `OptionsHash` covers compile options that can affect expansion,
+@@ -872,6 +972,17 @@
+ only when these identities match the operation it is about to perform.
+ Otherwise it must compile again with current options before writing.
+ 
++Required negative tests:
++
++| Case | Assertion |
++|---|---|
++| zero-value artifact passed to root cook, attach, order, fanout, or convergence writer | validation diagnostic and zero durable writes |
++| caller-built struct or stale deserialized payload with no accepted proof | validation diagnostic and zero durable writes |
++| accepted artifact with stale host capability, search paths, options, vars, or content hash | validation diagnostic and zero durable writes |
++| accepted artifact whose provenance/content hash no longer matches the selected formula | validation diagnostic and zero durable writes |
++| accepted artifact containing any fatal diagnostic | validation diagnostic and zero durable writes |
++| host-disabled compile result submitted for acceptance | no artifact minted; durable writer cannot be called without failing validation |
++
+ Retention semantics:
+ 
+ - Root, convergence, order-wisp, fanout, retry, and `on_complete` producers
+@@ -1135,6 +1246,32 @@
+ missing, has `status: active`, or names supported readers that still require
+ legacy `contract`.
+ 
++<!-- REVIEW: added per DR33-rollout-ownership -->
++
++The initial implementation seeds these artifacts with conservative blocking
++values before any first-party source conversion:
++
++| Artifact | Initial owner | Conservative seed |
++|---|---|---|
++| `docs/release/formula-compiler-compatibility.yaml` | release-captain | current `main` required, older supported readers listed, optional `bd` probe `not-needed` unless a checked owner test proves it active |
++| `docs/release/formula-compiler-min-floor.json` | release-captain | `first_party_requires_only_allowed: false` and no minimum floor until release evidence exists |
++| `docs/release/formula-compiler-external-support.md` | release-captain | `status: active`, alias support as the default strategy, and explicit expiration unset |
++
++"Two minor releases" means two completed Gas City minor releases after the
++first release that shipped dual declarations, canonical metadata writers, and
++the docs/example bundle. Pre-releases, nightly builds, failed releases, and
++commits that were not published to the supported distribution channel do not
++count. The release checklist records the two release tags, dates, supported
++reader set, legacy inventory path, and compatibility-corpus result before a
++gate depending on two minor releases may pass.
++
++Legacy `version` handling has an explicit report owner. The same release
++captain owns `gc formula validate --all-packs --legacy-version-report --json`,
++which records `version` omitted, `1`, `2`, string, wrong type, coexistence
++with v2-only constructs, and whether any code path still treats `version = 2`
++as compiler behavior. User-visible diagnostics and first-party source
++conversion are blocked while that report finds behavioral `version` coupling.
++
+ The `GC_NATIVE_FORMULA=false` and `bd` paths are validation-only probes after
+ this design lands, and they are optional. They are not supported runtime
+ fallbacks for sling, orders, convergence, fanout, controller validation, API,
+@@ -1263,11 +1400,26 @@
+ | `formula.compiler_requirement_missing` | `v2-only construct requires formula_compiler = ">=2"` / add `[requires] formula_compiler = ">=2"` | fatal stderr, exit 1 | HTTP 400 | formula preview validation error | no event except controller/order failure wrapper |
+ | `formula.compiler_requirement_unsatisfied` | `host formula compiler capability 1 does not satisfy >=2` / enable `[daemon] formula_v2` or choose a v1 formula | fatal stderr, exit 1; no beads created | HTTP 400 for validation/preview or 409 for launch conflict plus diagnostic body | disabled-capability state with remediation | registered compile-failure wrapper event |
+ | `formula.host_capability_invalid` | `invalid host formula compiler capability <value>` / construct host capabilities at the config edge | fatal stderr, exit 1 | HTTP 500 unless caused by request-local test input | internal error state with remediation | registered producer failure event |
+-| `formula.contract_deprecated` | `contract = "graph.v2" is deprecated` / use `[requires] formula_compiler = ">=2"` | bounded warning stderr by source/key | warning diagnostic in 200/preview response | non-blocking warning | suppressed warning event only for daemon/order paths |
++| `formula.contract_deprecated` | `contract = "graph.v2" is deprecated` / use `[requires] formula_compiler = ">=2"` | bounded warning stderr by source/key | warning diagnostic in 200/preview response | non-blocking warning | none; warnings are never Event Bus payloads |
+ | `formula.version_deprecated` | `formula version is legacy metadata` / use pack version/ref/SHA for artifact identity | warning only on validate/show, never on launch success | warning diagnostic on formula endpoints | non-blocking warning | none |
+ 
+ Projection rules:
+ 
++<!-- REVIEW: added per DR33-diagnostics-policy -->
++
++- Warning diagnostics do not publish Event Bus events. They are returned on
++  synchronous CLI/API/dashboard validation surfaces and may be counted in
++  producer-local state, but `formula.contract_deprecated` and
++  `formula.version_deprecated` never append warning events.
++- Compile-failure events are fatal-diagnostic wrappers only. Their event
++  constants are limited to named background or durable producers and must carry
++  the same typed diagnostic payload as the synchronous surface.
++- `config_generation` is the monotonically increasing generation assigned by
++  the city config loader after a successfully parsed config snapshot is
++  installed. A failed reload does not advance it. Direct CLI commands use the
++  snapshot generation they loaded for that invocation; order, controller, and
++  convergence loops use the generation captured at the start of the scan or
++  operation. Suppression and grouping reset when the generation changes.
+ - CLI commands that compile formulas print warnings to stderr once per
+   `(code, source path, source key)` per command invocation. Fatal diagnostics
+   exit non-zero and include the code, source path, offending value, normalized
+@@ -1669,6 +1821,7 @@
+ |---|---|---|---|
+ | canonical keys only, compiler capability `2` | true | true | matched by all new queries |
+ | canonical keys only, compiler capability `1` | true | false | matched as workflow root, not graph workflow |
++| canonical keys only, compiler capability `3` or higher on an old binary | true | false | matched as unknown future workflow root for observation/cleanup only; graph-specific writes fail closed |
+ | dual-stamped canonical plus `gc.formula_contract=graph.v2` | true | true | preferred migration shape |
+ | legacy-only `gc.formula_contract=graph.v2` | true during alias window | true during alias window | legacy fallback; validation reports migration warning |
+ | raw `contract` string copied into arbitrary metadata | false | false | not a durable workflow-root signal |
+@@ -1863,10 +2016,14 @@
+    `docs/reference/formula.md`, architecture docs, tutorials, examples,
+    testdata, config references, and generated CLI docs to teach `[requires]` as
+    canonical. Legacy `contract` appears only in migration notes.
+-6. First-party requires-only conversion: remove first-party `contract` stamps
++6. Pack-floor enforcement: land resolver/import enforcement for `[pack]
++   requires_gc`, seed the compatibility/minimum-floor/external-support
++   artifacts, and prove incompatible packs are rejected before formula
++   selection, staging, shadow resolution, or durable writes.
++7. First-party requires-only conversion: remove first-party `contract` stamps
+    only after the minimum binary floor is enforced and the `bd` compatibility
+    strategy is complete.
+-7. Alias removal: remove legacy `contract` support only after the measurable
++8. Alias removal: remove legacy `contract` support only after the measurable
+    alias-window criteria above pass.
+ 
+ Rollback notes:
+@@ -1876,7 +2033,7 @@
+ - Phase 3 can fall back to legacy predicates because roots are dual-stamped.
+ - Phase 4 keeps dual source declarations, so old binaries still read built-in
+   graph formulas.
+-- Phases 6 and 7 require an explicit release decision because they can affect
++- Phases 7 and 8 require an explicit release decision because they can affect
+   externally pinned packs.
+ 
+ Caller migration sub-phases:
+@@ -1965,19 +2122,31 @@
+ `internal/convergence` owns the projection API:
+ 
+ ```go
++type SourceValue[T any] struct {
++    Value      T
++    SourcePath string
++    SourceKey  string
++    Line       int
++    Column     int
++}
++
++type ConvergenceStepIdentity struct {
++    StepID    SourceValue[string]
++    StepTitle SourceValue[string]
++}
++
+ type ConvergenceMetadata struct {
+-    Enabled             bool
+-    RequiredVars        []string
+-    EvaluatePrompt      string
+-    EvaluatePromptPath  string
+-    RelevantStepID      string
+-    RelevantStepTitle   string
+-    ReservedStepIDs     []string
++    Enabled             SourceValue[bool]
++    RequiredVars        []SourceValue[string]
++    EvaluatePrompt      SourceValue[string]
++    EvaluatePromptPath  SourceValue[string]
++    SourceKey           string
++    RelevantStep        ConvergenceStepIdentity
++    ReservedStepIDs     []SourceValue[string]
+     RetryPolicy         CompiledRetryPolicy
+     RuntimeVars         []CompiledRuntimeVar
+     SourceFormula       string
+     SourcePath          string
+-    SourceKey           string
+     Provenance          Provenance
+     Requirements        NormalizedRequirements
+     CompileArtifactRef  string
+@@ -1991,12 +2160,16 @@
+ `ProjectFormula` may report convergence-domain diagnostics such as a missing
+ evaluate prompt for preview paths, but it may not reinterpret raw formula
+ requirement fields or host capability. Durable convergence paths use
+-`ProjectAcceptedFormula`. `CreateConvergenceBead`, retry root creation,
+-missing-child markers, speculative wisps, and the first `PourWisp` call all run
++`ProjectAcceptedFormula`. The projection is the canonical source-attributed
++carrier for convergence enablement, required vars, evaluate prompt content,
++prompt path, convergence source key, and convergence step identity; no caller
++may read those fields from raw TOML, root metadata, or a convergence-only
++subset parser. `CreateConvergenceBead`, retry root creation, next iteration,
++missing-child repair, speculative wisps, and the first `PourWisp` call all run
+ after this order: `CompileWithResult`, `AcceptCompileResult`,
+ `ProjectAcceptedFormula`, `ValidateProjection`, accepted artifact persistence
+-when needed, then durable root, metadata, wisp, retry, iteration, or child
+-writes.
++when needed, then durable root, metadata, wisp, retry, iteration,
++missing-child, or child writes.
+ 
+ Existing convergence roots use persisted accepted compile artifacts for their
+ current formula even if the host capability is later downgraded. Any operation
+@@ -2040,6 +2213,7 @@
+ |---|---|---|
+ | `internal/convergence` create | `CompileWithResult` -> `AcceptCompileResult` -> `ProjectAcceptedFormula` -> convergence validation -> write root | disabled host leaves store unchanged |
+ | convergence retry | reuse persisted accepted compile artifact for existing root, or compile/accept new target formula before retry write | disabled host leaves retry metadata unchanged when compiling new formula |
++| missing-child repair | load and validate the persisted accepted artifact before deciding whether a child should exist; compile/accept again only when the selected formula identity changes | disabled host does not create replacement child from a new formula |
+ | speculative wisp creation | compile/accept all candidate formulas before first speculative write | disabled host writes no speculative root or child |
+ | `internal/dispatch/fanout.go` fragment expansion | parent accepted artifact plus fragment `CompileWithResult`/`AcceptCompileResult` calls before expansion writes | disabled host writes no fragment child, convoy, or continuation |
+ | next-iteration convergence/fanout path | compile/accept iteration formula before iteration bead creation | disabled host writes no next-iteration bead |
+@@ -2113,6 +2287,25 @@
+ They emit or surface an unknown-capability diagnostic instead of silently
+ running new semantics.
+ 
++<!-- REVIEW: added per DR33-future-root-lifecycle -->
++
++Future-root lifecycle rules for old binaries:
++
++| Operation | `unknown_future_capability_workflow` behavior |
++|---|---|
++| Observation, list, API/dashboard read models, and convoy/source scans | include the root with an unknown-capability diagnostic and no graph-specific inference |
++| Cleanup of already-closed or orphaned records | allowed only when cleanup does not inspect or synthesize future graph semantics |
++| Retry, fanout, continuation, next iteration, missing-child repair, child creation, or `on_complete` launch | fail closed before writes with an unknown-capability diagnostic |
++| Selecting or compiling a new formula that requires the future capability or future axis | fail closed through parser/host capability diagnostics before writes |
++| Existing accepted artifact load | allowed only to display provenance and diagnostics; not accepted as authorization for graph-specific writes the old binary cannot understand |
++
++Old-reader fixtures must cover persisted roots with
++`gc.formula_compiler_capability=3`, future `[requires]` axes, missing artifact
++refs, stale artifact refs, dual-stamped legacy metadata plus future canonical
++metadata, and dashboard/API projections. The expected result is visibility for
++operators, zero graph-specific durable writes, and stable remediation to
++upgrade Gas City.
++
+ Every new compiler capability or requirement axis has a release checklist:
+ 
+ | Checklist item | Required evidence |

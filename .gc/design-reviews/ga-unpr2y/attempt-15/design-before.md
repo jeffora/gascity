@@ -1,0 +1,471 @@
+# Session Refactor Design
+
+| Field | Value |
+|---|---|
+| Status | Draft backlog |
+| Behavior source | `REQUIREMENTS.md` |
+| Scope | Small refactors that move session decisions into `internal/session` |
+| Latest design-review disposition | Attempt 14 global verdict `block`; this revision is an `iterate` response |
+| First executable work | Slice 0 evidence preflight only |
+| Archive | `DESIGN_REVIEW_NOTES.md` is historical and non-normative unless text is copied here |
+
+This is not a new architecture program. It is a refactor plan for making
+session behavior easier to find, test, and change without changing product
+behavior. The active design-review verdict is still `block`, so no
+behavior-moving slice is approved until the Slice 0 proof below exists and
+passes.
+
+## Goal
+
+Move session-specific decisions into `internal/session` one operation at a
+time.
+
+Today some callers in API, CLI, worker, and reconciler code know too much about
+session state, target resolution, wake rules, and lifecycle metadata. The
+refactor should make those callers thinner:
+
+```text
+caller gathers facts -> internal/session decides -> caller executes or renders
+```
+
+The caller may still gather external facts, call runtime providers, write
+non-session domain state, or render API/CLI output. The session module owns only
+the session rule.
+
+## Product Rule
+
+`REQUIREMENTS.md` is the behavior source of truth. A refactor must preserve the
+scenario rows it touches.
+
+If current code and `REQUIREMENTS.md` disagree:
+
+- update code when the requirement is right
+- update `REQUIREMENTS.md` when current behavior is the intended product rule
+- ask for a decision when neither is clear
+
+Behavior-changing requirements edits require a durable owner-approval artifact
+in the implementing bead or plan. An implementation may not relabel behavior
+drift as a requirements update unless the changed scenario rows, exact proof
+selectors, and approval record land together.
+
+## Attempt 14 Review Response
+
+<!-- REVIEW: added per attempt-14-global-synthesis -->
+
+Attempt 14 still blocks decomposition. This revision sets
+`design_review.verdict=iterate` and treats the findings below as active design
+contracts, not advisory notes. The only schedulable implementation work is the
+non-mutating Slice 0 evidence preflight.
+
+| Finding | Active design response |
+|---|---|
+| Target classification contract is undefined. | Add the Target Classification Contract below with typed candidate/result kinds, no-side-effect rules, closed/historical handling, a first adopter, and a per-surface precedence matrix. |
+| Behavior parity proof is unenforceable. | Slice 0 creates `SCENARIO_PARITY.yaml` mapping every active `SESSION-*` row to touched surfaces, exact selectors, proof commands, current oracle, and owner-approved amendment state. |
+| Mutation ownership lacks a writer boundary. | Slice 0 creates a source-complete Mutation Ownership Ledger plus a shrink-only CI guard for external `SetMetadata*`, patch-map application, patch constructors, repair, doctor, migration, API, CLI, worker, and test exceptions. |
+| Mutating commands lack atomic recovery semantics. | Every mutation-moving slice must define an Atomic Command Contract before decomposition. The contract names facts, stale/rejected outcomes, write primitive or fence, event/runtime ordering, partial states, recovery owner, and crash/race tests. |
+| Worker/API/CLI routing is unsettled. | The worker-boundary section below names read-only store-level work, worker-routed lifecycle work, existing API exceptions, and the route inventory required before any new delegation. |
+| Reconciler and runtime fact ownership is underspecified. | The reconciler/session split matrix below keeps work demand, scheduling, budgets, provider health, progress, alerts, pool sizing, and provider policy outside `internal/session`. |
+| Event and recovery rules are not normative. | The Event and Recovery Contract below makes events post-commit facts, not commands, and requires durable scans for safety-critical convergence. |
+| Operator diagnostics and cost budgets are missing. | Slice 0 creates `DIAGNOSTICS_MANIFEST.yaml` with structured reason/outcome codes, renderer coverage, query/subprocess budgets, and large-city hot-path proof. |
+| Scope authority and vocabulary need tightening. | `DESIGN_REVIEW_NOTES.md` is historical only. Future vocabulary remains private or provisional until a real adopting caller proves exact fields and non-goals. |
+
+Unfixable in this document: the design-review workflow wrote some attempt-14
+persona syntheses under an older attempt path. That is workflow plumbing outside
+`internal/session`; the workflow formula must fix artifact placement. This
+document consumes the bead-stamped global synthesis path for attempt 14.
+
+## Authority And Entry Gates
+
+<!-- REVIEW: added per attempt-14-scope-authority -->
+
+No section in `DESIGN_REVIEW_NOTES.md` authorizes work. If an old note is still
+true, copy the rule into this file or into a Slice 0 artifact.
+
+No behavior-moving bead may start until it depends on a closed Slice 0 bead and
+cites the exact artifact rows it consumes. Required bead metadata for later
+slices:
+
+- `session_design.slice`
+- closed Slice 0 bead ID
+- referenced inventory IDs
+- referenced `SESSION-*` rows
+- one-writer evidence for touched key families
+- rollback and data-direction evidence
+- proof command and test selector metadata
+- route, wire, or rendering parity rows when public surfaces change
+- unresolved-risk metadata when behavior is intentionally deferred
+
+## Slice 0 Evidence Preflight
+
+<!-- REVIEW: added per behavior-parity-and-mutation-ownership -->
+
+Slice 0 is non-mutating. It does not move a caller, introduce a public command
+API, change target resolution, materialize sessions, repair metadata, add event
+payloads, or alter reconciler policy.
+
+Slice 0 must create and validate these artifacts:
+
+| Artifact | Purpose |
+|---|---|
+| `SLICE0_BASELINE.md` | Checkout baseline, upstream/ancestry facts, proof transcript, and explicit reason if an upstream ref is unavailable. |
+| `SLICE0_CONTRACT.yaml` | Machine-readable close contract for artifacts, schemas, validators, fixtures, proof commands, and workflow finalizer metadata. |
+| `BOUNDARY_INVENTORY.md` | Human-readable source inventory for session lifecycle, identity, route, event, repair, and runtime fact boundaries. |
+| `SESSION_BOUNDARY_SYMBOLS.yaml` | Machine-readable writer/read inventory with path, symbol, key family, dynamic-key source, receiver/helper chain, owner, exception, and retirement condition. |
+| `SCENARIO_PARITY.yaml` | One row for every active `SESSION-*` scenario, touched surfaces, exact tests or static selectors, proof command, current oracle, and amendment status. |
+| `TARGET_CLASSIFICATION_CONTRACT.yaml` | Typed result taxonomy, candidate schema, surface precedence matrix, first adopter, and no-side-effect proof. |
+| `COMMAND_APPLIERS.yaml` | Atomic command rows for wake, close, retire, drain, runtime start, rollback, event emission, provider side effects, and repair/backfill. |
+| `BOUNDARY_MATRIX.yaml` | Session/reconciler/runtime ownership matrix for wake, hold, wait, drain, runtime observation, pool demand, provider health, progress, repair, and destructive actions. |
+| `API_CLI_ROUTE_INVENTORY.yaml` | Huma routes, legacy mux routes, Cobra commands, `apiClient()` fallbacks, generated-client paths, dashboard/SSE projections, doctor, inspect, trace, mail, extmsg, transcript, attach, nudge, pool-resume, assignee, and generic bead routes that can reach sessions. |
+| `WORKER_BOUNDARY_EXCEPTIONS.yaml` | Exact production exceptions to the worker boundary, including API manager construction and API session-resolution direct-create paths, with owner and expiry. |
+| `DIAGNOSTICS_MANIFEST.yaml` | Operation/check IDs, reason/outcome codes, renderer surfaces, trace mappings, required facts, redaction, event relationships, query budgets, subprocess budgets, and hot-loop constraints. |
+| `VOCABULARY_CHECKPOINTS.yaml` | Shared type/field lifecycle, first caller, exact demanded fields, non-goals, rule-of-two status, and expansion rule. |
+
+Slice 0 validators must fail on missing artifacts, schema-invalid YAML, stale
+paths, zero-match selectors, missing negative fixtures, broad exclusions,
+unowned writers, missing renderer proof, unobservable event claims, absent
+budget proof, or requirements rows without parity records.
+
+Minimum proof command:
+
+```bash
+go test ./cmd/gc ./internal/session ./internal/api ./internal/events -run 'TestSlice0Contract|TestSessionBoundaryGuard|TestSessionBoundaryInventoryFresh|TestSlice0Artifacts|TestScenarioParityFreshness|TestVocabularyCheckpoints|TestSessionDiagnosticsManifest|TestSessionCommandApplierLedger|TestSessionBoundaryMatrix|TestSessionRouteInventoryFresh|TestWorkerBoundaryExceptionLedger|TestEveryKnownEventTypeHasRegisteredPayload' -count=1
+```
+
+## Target Classification Contract
+
+<!-- REVIEW: added per target-classification-contract -->
+
+The first behavior extraction after Slice 0 is read-only session target
+classification. It separates what an input token is from what an operation is
+allowed to do with it.
+
+First adopting surface: API query-side session lookup for read-only session
+get, pending, transcript, and related query endpoints that already resolve a
+session selector without mutating session beads. Mutating API commands, CLI
+commands, mail, extmsg, assignee normalization, nudge, attach, pool resume, and
+sling remain characterization-only until their own surface rows pass.
+
+The classifier is side-effect free:
+
+- no store writes
+- no session materialization
+- no repair or reopen
+- no runtime provider calls
+- no event emission
+- no work, mail, extmsg, or convoy mutation
+- no API/CLI rendering decisions
+
+Typed candidate fields:
+
+| Field | Meaning |
+|---|---|
+| `kind` | `direct-id`, `live-session-name`, `live-alias`, `closed-session`, `configured-name`, `historical-alias`, `path-alias`, `ordinary-config-target`, `template-target`, `forbidden-kind`, `repair-needed`, `not-found`, `store-error`, or `ambiguous`. |
+| `source_surface` | Surface asking for classification, such as `api-query`, `api-command`, `cli`, `mail`, `extmsg`, `assignee`, `transcript`, `attach`, or `nudge`. |
+| `normalized_token` | Trimmed target token after surface-local normalization. |
+| `session_id` | Bead ID when a concrete session bead is identified. |
+| `session_name` / `alias` | Current identity fields that matched, if any. |
+| `config_identity` | Configured named identity when classification finds a config target rather than a live session. |
+| `status` / `closed` / `historical` | Bead status and whether the candidate is terminal or historical. |
+| `candidate_order` | Source-derived ordering used only for diagnostics and adapter parity. |
+| `conflict_group` | Stable group ID for same-token collisions or duplicate canonical identities. |
+| `retryable` | True only for store/runtime observation errors where retrying the same input can change the result. |
+| `diagnostic_code` | Stable reason code rendered by trace/doctor/API/CLI adapters. |
+
+Typed selection result kinds:
+
+- `selected`: exactly one candidate selected by a surface adapter
+- `not-found`: no current surface-legal candidate
+- `ambiguous`: multiple candidates remain after surface precedence
+- `rejected`: candidate exists but the surface forbids it
+- `repair-needed`: read path found metadata that a later audited repair command
+  may fix after revalidation
+- `store-error`: classification could not complete
+
+The raw classifier never decides operation policy. Each surface adapter owns the
+authoritative selected result and must preserve current output behavior.
+
+Per-surface precedence matrix:
+
+| Surface | Delegation state | Current precedence to preserve before delegation |
+|---|---|---|
+| API query-side read-only session lookup | First adopter after Slice 0 | Direct session bead ID, then open exact `session_name`, then open exact current `alias`; allow closed lookup only for endpoints that already allow it; reject `template:<name>` and ordinary config names as live session targets; no materialization or repair. |
+| API mutating session commands | Characterization only | Preserve route-specific Huma status, problem body, request ID behavior, generated-client shape, materialization, close/wake semantics, and existing API exceptions until a command contract and worker-boundary row exist. |
+| CLI local and `apiClient()` fallback paths | Characterization only | Preserve stdout, stderr, JSON shape, exit code, fallback order, and whether the local path or API path owns the session operation. |
+| Mail send/query | Characterization only | Preserve configured named mailbox behavior without materializing a session, live named-session mailbox use, recipient-set behavior, and rejection of template factory targets where required. |
+| Extmsg | Characterization only | Preserve binding cleanup and peer-notification behavior outside the classifier; the classifier may identify session targets but not touch extmsg state. |
+| Assignee, sling, nudge, attach, logs, transcript, pool resume | Characterization only | Each surface needs its own closed/historical handling, ambiguity behavior, error projection, materialization rule, and no raw-candidate leakage proof before delegation. |
+
+## Mutation Ownership Ledger
+
+<!-- REVIEW: added per mutation-ownership-ledger -->
+
+Before any mutation-owning slice, Slice 0 must enumerate every production writer
+that can alter session lifecycle, identity, wake, runtime-start, close, drain,
+repair, or transcript metadata.
+
+Each ledger row must include:
+
+- exact path and function
+- called store or helper method
+- session bead targeting proof
+- exact key family and literal key, or dynamic-key source
+- current owner
+- intended owning slice
+- allowed exception reason
+- persistence-error handling
+- trace, doctor, or proof evidence when operator-visible
+- retirement condition
+
+The shrink-only guard must fail on new external `SetMetadata*`,
+`MetadataPatch` application, patch-constructor use, raw top-level status/type
+mutation, `session.Manager.Create*` bypasses, repair/doctor/migration bypasses,
+or generic bead mutation bridges unless an exact expiring row exists. Tests and
+fixtures may be exceptions only when their path is exact and their fixture role
+is declared.
+
+Repair writes, including empty-type repair and runtime identity backfills, must
+have an audited owner. A read path may return `repair-needed`, but it may not
+silently repair session-owned keys unless it is the named repair owner for that
+key family and propagates persistence errors.
+
+## Atomic Command Contract
+
+<!-- REVIEW: added per atomic-command-contract -->
+
+Every mutation-moving slice must define an operation-specific command contract
+before decomposition. A generic `facts -> command` shape is not sufficient.
+
+Required fields per operation:
+
+- immutable facts read by the decider
+- freshness and stale-fact rules
+- preconditions and terminal conflicts
+- rejected result and retryability
+- write primitive, conditional fence, token, or explicit repair-converged blind
+  write rule
+- runtime provider ordering
+- post-commit event ordering
+- rollback or compensation rule
+- partial-state matrix
+- crash recovery owner
+- duplicate and skipped-event behavior
+- characterization tests for the current caller
+- parity tests after delegation
+
+Operations that require contracts before they can move: wake, close, configured
+identity retirement, runtime start prepare/commit/rollback, drain, drain-ack,
+runtime-missing cleanup, provider-health reactions, and reconciler lifecycle
+transitions.
+
+## Worker/API/CLI Boundary
+
+<!-- REVIEW: added per worker-api-cli-boundary -->
+
+Read-only classification may be store-level because it does not create,
+destroy, wake, drain, or repair sessions. Lifecycle operations exposed through
+production CLI code must keep routing through `internal/worker/handle.go`
+unless root `AGENTS.md` lists an active exception.
+
+Current routing rules:
+
+- Close remains aligned with `worker.Handle.CloseDetailed` for production CLI
+  callers.
+- Wake and drain slices must decide whether the operation stays store-level or
+  grows `worker.Handle`; the decision must be recorded in
+  `WORKER_BOUNDARY_EXCEPTIONS.yaml` before delegation.
+- Existing API manager construction and API session-resolution direct-create
+  paths are documented exceptions, not precedent for new bypasses.
+- New direct `session.Manager.Create*`, sessionlog, or worker-boundary bypasses
+  outside tests are forbidden unless the exception ledger names exact path,
+  owner, reason, and retirement proof.
+- API-visible behavior must preserve Huma typed responses, OpenAPI generation,
+  generated client compatibility, dashboard/SSE expectations, and fallback
+  parity with CLI `apiClient()` callers.
+
+Route-level parity tests must cover both local and API paths for every
+session-affecting command that delegates to a new session-owned operation.
+
+## Reconciler, Runtime, And Session Split
+
+<!-- REVIEW: added per reconciler-runtime-fact-ownership -->
+
+`internal/session` may own lifecycle eligibility and identity classification
+over immutable facts. It must not own controller policy.
+
+| Input or decision | Owner |
+|---|---|
+| Lifecycle projection, terminal states, wake blockers, identity conflicts, configured-name canonical/historical status | `internal/session` |
+| Work demand, dependency state, dispatch scheduling, pool desired size, cold-start demand, nested caps, restart budgets, alert dedupe, progress policy, idle-sleep policy | controller/reconciler |
+| Runtime liveness observations, provider errors, process existence, transcript/provider-specific facts | runtime provider or worker/runtime adapter |
+| API/CLI rendering, Huma error mapping, stdout/stderr/JSON shape | API/CLI adapter |
+| Mail, extmsg, work release, convoy, and external-message policy | owning domain package or controller |
+
+Provider-neutral runtime intent fields may cross into a session-owned command
+only when the command contract needs them. They may include stable session bead
+ID, generation or instance token, provider family, runtime session key, work
+directory, and config hash. They must not include provider-specific scheduling,
+health, progress, budget, or alert decisions.
+
+Destructive actions with unknown, stale, partial, or provider-error runtime
+facts are rejected unless the current requirements and the operation contract
+explicitly state a safe convergence rule and test it.
+
+## Event And Recovery Contract
+
+<!-- REVIEW: added per event-recovery-contract -->
+
+Session events are post-commit facts. They are not commands, locks, durable
+truth, or the only recovery mechanism.
+
+Event-bearing slices must state:
+
+- committed fact that caused the event
+- event emission owner
+- stable identity payload fields
+- typed payload registration in `events.KnownEventTypes`
+- SSE/OpenAPI/generated-client obligations when the event is public
+- best-effort subscribers versus critical recovery actions
+- durable scan owner for critical convergence
+- idempotency key or duplicate behavior
+- crash-after-commit, skipped-event, duplicate-event, and stale-event tests
+
+Close, work release, wake, drain, runtime start, provider-health reactions, and
+identity retirement must converge from durable facts even when event emission or
+subscriber execution is skipped.
+
+## Observability And Cost
+
+<!-- REVIEW: added per diagnostics-and-cost -->
+
+Classifiers, deciders, and commands must return structured diagnostics rather
+than hiding decisions in local strings.
+
+Diagnostic result fields:
+
+- operation ID
+- result kind
+- reason code
+- retryability
+- selected session identity when safe to expose
+- source facts used
+- missing or stale fact indicator
+- renderer surfaces that must show the result
+- redaction keys
+
+`DIAGNOSTICS_MANIFEST.yaml` owns trace mappings, doctor/session-inspect output,
+API/CLI rendering parity, event relationships, and test selectors. New
+diagnostic vocabulary must have centralized constants or manifest rows before
+use.
+
+Cost rules:
+
+- Hot-path classification and reconciler fact materialization must use bounded
+  indexed lookups or counting-store proof.
+- No all-session scan is allowed on a hot path unless the surface has a
+  measured budget and a large-city baseline.
+- No subprocess loop is allowed in classification or reconciler hot loops.
+- Subscriber fan-out, event emission, and durable scans need default caps or
+  benchmark-relative budgets.
+
+## Vocabulary Lifecycle
+
+Shared vocabulary has four states:
+
+| State | Meaning |
+|---|---|
+| `documented` | Existing behavior or code vocabulary named for traceability only. |
+| `private` | May exist inside one slice package or adapter, but is not a shared contract. |
+| `provisional` | Design-only upper bound for a future slice; cannot appear in public API, generated clients, event payloads, or cross-slice contracts. |
+| `delegating` | A real production caller has delegated to the type or field and its checkpoint row names exact fields, non-goals, proof tests, and expansion rules. |
+
+Future terms such as command result, runtime intent, session fact event, and
+generic conflict stay `provisional` until a production caller proves the exact
+field set. Flat optional envelopes are not acceptable for new shared types; use
+tagged result kinds or per-kind structs when only some fields are meaningful.
+
+## Shape
+
+Prefer small operation-specific APIs over a broad `SessionService`.
+
+Good shape:
+
+```text
+Target facts -> read-only target classifier -> caller-specific adapter
+Wake facts -> wake decider -> wake command
+Close facts -> close decider -> close command
+```
+
+Avoid:
+
+- one large `SessionFacts` struct
+- a generic command bus
+- event sourcing as the first step
+- moving work, mail, extmsg, provider, or pool policy into `internal/session`
+
+## Boundaries
+
+`internal/session` should own:
+
+- lifecycle projection and transition rules
+- session identity and target classification rules
+- session-owned lifecycle and wake metadata mutations after their command
+  contracts exist
+- pure decisions that can be unit-tested without stores or providers
+
+Callers should own:
+
+- API and CLI rendering
+- work assignment and release policy outside session facts
+- mail and external-message delivery policy
+- runtime provider execution
+- reconciler scaling, budget, progress, and alert policy
+
+## Refactor Rules
+
+For each operation:
+
+1. Pick one current behavior cluster.
+2. Read the matching `REQUIREMENTS.md` scenario rows.
+3. Add or keep characterization tests for the current caller behavior.
+4. Add or reference the Slice 0 artifact rows that cover the cluster.
+5. Add a small session-owned decider or command only after its contract exists.
+6. Move one caller to it.
+7. Keep the old behavior unless the requirements row changes with owner
+   approval.
+8. Delete or shrink duplicated caller logic after parity is proven.
+
+The test should prove the behavior the user sees, not every internal branch.
+
+## Backlog
+
+0. Slice 0 evidence preflight: create the non-mutating inventories, schemas,
+   validators, negative fixtures, proof transcripts, and workflow close gate.
+1. API query target classification: adopt read-only target classification for
+   API query-side lookup while preserving closed lookup and rejection behavior.
+2. Additional target-classification surfaces: adopt CLI, mail, extmsg,
+   assignee, nudge, attach, transcript, logs, and pool resume one surface at a
+   time after each compatibility matrix passes.
+3. Explicit wake: move wake eligibility/conflict decisions behind a
+   session-owned operation after worker-boundary routing and atomic command
+   rows exist.
+4. Close and identity retirement: keep close semantics, worker-boundary routing,
+   event emission, and work-release recovery clear without scattering lifecycle
+   metadata writes.
+5. Runtime start: fold prepare/commit/rollback metadata ownership into one
+   command after stale-token, partial-write, provider compensation, and recovery
+   tests exist.
+6. Reconciler facts: extract only narrow lifecycle eligibility facts; keep pool
+   scaling, work demand, provider health, progress, budgets, and alerts in the
+   reconciler.
+
+## Non-Goals
+
+- Do not rewrite the reconciler wholesale.
+- Do not introduce a large facade before one small operation proves value.
+- Do not move work, mail, extmsg, or provider-specific runtime policy into
+  `internal/session`.
+- Do not make event sourcing the first implementation step.
+- Do not use design review feedback as a substitute for readable requirements
+  and tests.
+- Do not grow Slice 0 into behavior-moving preflight work; it proves boundaries
+  and gates only.

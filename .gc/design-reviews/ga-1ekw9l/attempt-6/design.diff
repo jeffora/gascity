@@ -1,0 +1,314 @@
+--- .gc/design-reviews/ga-1ekw9l/attempt-6/design-before.md	2026-06-09 11:46:07.101838647 +0000
++++ plans/core-gastown-pack-migration/implementation-plan.md	2026-06-09 13:25:58.872380142 +0000
+@@ -7,7 +7,7 @@
+ requirements_file: /data/projects/gascity/plans/core-gastown-pack-migration/requirements.md
+ status: draft
+ created_at: 2026-06-04T15:07:35Z
+-updated_at: 2026-06-09T07:28:00Z
++updated_at: 2026-06-09T13:20:59Z
+ ---
+ 
+ # Implementation Plan: Core and Gastown Pack Split
+@@ -21,9 +21,12 @@
+ Gastown remains an explicit public pack import pinned to immutable external
+ evidence. The migration is blocked from source deletion or Maintenance removal
+ until generated behavior evidence, public Gastown compatibility artifacts, and
+-exact-pack compatibility tests prove behavior preservation. The implementation
+-lands in small cross-repo slices with fail-closed loader gates, failure-atomic
+-doctor fixes, and operator-visible diagnostics.
++exact-pack compatibility tests prove behavior preservation. This plan is ready
++only for prerequisite-producing decomposition until the AC6, AC7, and AC14-AC17
++support artifacts exist and pass; Gas City behavior-changing slices remain
++blocked behind those gates. The implementation lands in small cross-repo slices
++with fail-closed loader gates, failure-atomic doctor fixes, and
++operator-visible diagnostics.
+ 
+ ## Current System
+ 
+@@ -153,6 +156,17 @@
+ generator, schema, sample rows, and freshness tests into checked-in
+ implementation paths before source deletion can be scheduled.
+ 
++The generator command is executable and freshness-checked:
++
++```bash
++go run ./cmd/gc pack-evidence generate \
++  --old-baseline <immutable-gas-city-commit> \
++  --public-gastown <gascity-packs-checkout-or-cache> \
++  --out plans/core-gastown-pack-migration/support/behavior-preservation-manifest.yaml
++go run ./cmd/gc pack-evidence validate \
++  --manifest plans/core-gastown-pack-migration/support/behavior-preservation-manifest.yaml
++```
++
+ Each manifest row must include:
+ 
+ - stable row id;
+@@ -175,6 +189,13 @@
+ - semantic-equivalence assertion, or approved delta/removal record with owner,
+   reason, replacement, and operator impact.
+ 
++Evidence classes are `preserved`, `moved`, `generalized`, `split`,
++`retired-approved`, and `external-prerequisite`. A moved, split, generalized,
++or deleted source row must have one old witness and one new executable witness.
++Rows whose new witness lives in public Gastown cannot unblock Gas City deletion
++until the public commit, pack digest, behavior-manifest digest, and packcompat
++transcript are cited in the pin ledger.
++
+ The generator walks old Gas City behavior-bearing sources under Core,
+ Maintenance, Gastown examples, hook overlays, formulas, orders, prompts,
+ skills, shell scripts, doctor strings, route metadata, notification templates,
+@@ -190,6 +211,13 @@
+ pack-relative paths, verifies hook overlays and configured agents, and checks
+ one assertion per manifest row.
+ 
++Packcompat has two named modes. Compatibility-pin mode runs while local
++Maintenance and in-tree Gastown sources still exist and proves the public pack
++does not depend on hidden fallback. Activation-pin mode runs with Maintenance
++removed from required host packs and fails if any assertion resolves from
++`examples/gastown`, `.gc/system/packs/gastown`, `.gc/system/packs/maintenance`,
++or a synthetic public alias.
++
+ ### Required System Pack Loader
+ <!-- REVIEW: added per required-core-loader-contract -->
+ 
+@@ -203,6 +231,17 @@
+ - `LoadRuntimeCity(ctx, cityPath, opts)`;
+ - `LoadRuntimeCityNoRefresh(ctx, cityPath, opts)`.
+ 
++The trusted descriptor flow is part of the API, not an implementation detail.
++`internal/systempacks` builds a `RequiredDescriptor` for each required host
++pack with pack id, source kind, selected provider, materialization root,
++expected content-manifest digest, expected file-set digest, required
++`pack.toml` digest, and descriptor id. It passes those descriptors to
++`internal/config` through a typed option such as
++`config.WithRequiredSystemPacks`. Config resolution returns
++`RequiredSystemPackParticipation` records keyed by the same descriptor id,
++including the resolved layer id, import edge, effective contribution digest,
++collision result, and allowed-use mode. <!-- REVIEW: added per required-pack participation and loader authority -->
++
+ Normal command paths and behavior-driving production `internal/` paths call
+ `LoadRuntimeCity` or `LoadRuntimeCityNoRefresh`; they do not hand-build
+ required-pack include lists or call `config.Load*` directly. Low-level
+@@ -224,6 +263,13 @@
+ participated in the resolved config. A generated or repaired Core tree without
+ typed participation is a load failure.
+ 
++Gate 1 and Gate 2 are bound by descriptor id. Gate 1 proves that the exact
++materialized directory for each descriptor matches the embedded manifest and
++provider selection before any `pack.toml` is trusted. Gate 2 proves that the
++same descriptor, not a same-named user import or copied Core tree, contributed
++to the final config layer graph. A path match without descriptor participation,
++or participation without a matching validated file set, is `blocked`.
++
+ No-refresh reloads do not repair. If Core is missing, corrupt, stale, shadowed,
+ or missing participation, the controller keeps the last-known-good runtime
+ config only for read-only status/reporting, publishes an event and diagnostic,
+@@ -232,6 +278,13 @@
+ CLI paths surface the same diagnostic instead of silently continuing with
+ current invalid config.
+ 
++Behavior-changing entry points receive a `RuntimeSnapshot` or `RuntimeGuard`
++from `internal/systempacks` and call `RequireReady(op)` before dispatch,
++formula expansion, order evaluation, hook rendering, prompt resolution,
++session start, worker creation, API mutation, or controller scheduling.
++Read-only status/reporting entry points may use `read_only_degraded` snapshots
++but must surface the diagnostics unchanged.
++
+ Add scanner tests modeled on `cmd/gc/worker_boundary_import_test.go` to reject
+ production direct calls to `config.Load`, `config.LoadCity`,
+ `config.LoadWithIncludes`, aliases, wrappers, method/function values, and
+@@ -240,6 +293,14 @@
+ with file, function, call kind, fields consumed, reason, and a focused test
+ proving it cannot drive normal runtime behavior.
+ 
++The bypass inventory lives in a generated allowlist such as
++`internal/systempacks/testdata/config_loader_allowlist.yaml`. Its validator is
++AST/type-aware: aliases, selector values, function variables, wrapper
++functions, and package-local helper names count as bypasses unless the
++allowlist row proves the call is a partial read that cannot start sessions,
++expand formulas, render hooks/prompts, dispatch work, evaluate orders, or write
++city state.
++
+ Provider-conditioned required-pack selection lives only in `internal/systempacks`.
+ Callers pass city path and selected beads provider; they do not branch on Core,
+ `bd`, or `dolt` include behavior outside that boundary.
+@@ -272,6 +333,17 @@
+ Maintenance cache entries may remain on disk, but new lock generation and
+ runtime resolution must not select them.
+ 
++The subpath-aware lock/cache proof lands before the first Gas City slice that
++updates `internal/config/PublicGastownPackVersion`. Lock entries store source,
++commit, subpath, canonical pack-tree `sha256`, behavior-manifest `sha256`,
++cache entry id, and validation timestamp. Old lock or cache records that lack
++subpath or digest fields are read only far enough to emit a version-skew or
++repair diagnostic; they cannot satisfy a new `sha:` pin. The pin-coherence gate
++compares `PublicGastownPackVersion`, `public-gastown-pins.yaml`,
++fresh-init output, lockfile provenance, cache proof, pack digest, and
++behavior-manifest digest in one command before the pin is consumed.
++<!-- REVIEW: added per public-pack pin/cache sequencing -->
++
+ Zero-duplicate-active and zero-merge gates compare active bundled, active
+ public, stale generated, synthetic cache, ordinary remote cache, compatibility
+ pin, activation pin, and old/new binary views. If the same behavior id is active
+@@ -295,6 +367,15 @@
+ lockfiles, installed pack directories, runtime-state migrations, or import
+ rewrites.
+ 
++The first doctor slice generates
++`plans/core-gastown-pack-migration/support/doctor-fix-inventory.yaml` from
++every `Fix(ctx)`, import rewrite, protected write, pack install/update,
++required-pack repair/quarantine, runtime-state write, cleanup path, and
++test-only mutation helper. Each row is assigned to `FixIntent`, `report-only`,
++`remove`, or `allowed-test-helper`; production rows without an assignment fail
++CI. Existing direct mutation paths are deleted or wrapped before any new public
++pin, import rewrite, or runtime-state migration can mutate city state.
++
+ The coordinator acquires a crash-released city advisory lock before digest
+ preflight. If a report-only phase reads before the lock for operator messaging,
+ it repeats digest and provenance validation after the lock and before staging.
+@@ -334,6 +415,14 @@
+ defaults, prompt fallbacks, formulas, overlays, metadata, tests, docs, and
+ public Gastown companion files.
+ 
++Active behavior enumeration is also part of the role-neutral contract. Loaders,
++installers, cache readers, docs/reference generators, prompt scanners, formula
++and order expanders, script resolvers, hook overlay readers, and doctor checks
++must obtain roots through `internal/packsource.ActiveRootsFor(kind)` or a typed
++equivalent. Scanner tests reject raw `fs.ReadDir`, `fs.WalkDir`,
++`filepath.Walk`, `Glob`, or string-prefix enumeration over pack roots unless an
++allowlist row proves the path is a historical fixture or non-behavior audit.
++
+ Core-owned behavior may not contain or branch on `mayor`, `deacon`, `witness`,
+ `refinery`, `polecat`, `boot`, `crew`, or `gastown` except through explicit
+ historical/test allowlist rows with owner, justification, expiry, and negative
+@@ -375,6 +464,15 @@
+ tests, precompact hook tests, packlint, generated docs, hook references, and
+ helper paths.
+ 
++The buildable end state is explicit: no production package may import
++`internal/bootstrap/packs/core`; no production `//go:embed packs/**` may carry
++Core assets; `bootstrapAssets`, `embeddedBootstrapPacks`, and `BootstrapPacks`
++are deleted or backed only by `bootstrap.EmptyFS`; and package deletion of
++`internal/bootstrap/packs/core` is the compile-time proof that old imports are
++gone. Path-literal scanners cover `packs/core`, `AssetDir: "packs/core"`,
++`Subpath` strings, constructed paths, docs, examples, fixtures, and generated
++files. <!-- REVIEW: added per bootstrap fixture isolation -->
++
+ Production bootstrap no longer embeds Core assets. Tests that need bootstrap
+ assets use an empty `fs.FS` fixture or minimal inline fixture whose `Stat`,
+ `WalkDir`, and `ReadFile` behavior is asserted. Fixture guard tests fail if
+@@ -403,6 +501,14 @@
+ doctor output. Allowlist rows carry owner, justification, expiry, and negative
+ fixtures.
+ 
++The vocabulary authority is
++`plans/core-gastown-pack-migration/support/terminology-matrix.yaml`; generated
++operator-facing evidence is written under
++`plans/core-gastown-pack-migration/support/generated-references/`. If
++`docs/reference/system-packs.md` does not exist in the implementation branch,
++the slice creates it before docs lint runs instead of treating the path as an
++optional note.
++
+ The wording scanner consumes a terminology matrix with token, class,
+ allowed-contexts, denied-contexts, owner, examples, false-positive rule, and
+ golden fixture. It distinguishes retired standalone Maintenance-pack wording
+@@ -445,6 +551,16 @@
+ CI treats those artifacts as stale if their source digests, old/new witness
+ digests, or public pin values do not match the current tree.
+ 
++Acceptance support artifacts live under
++`plans/core-gastown-pack-migration/support/` until a later slice promotes any
++validator or schema into package-local `testdata`. The required support set is
++`pack-resolution-matrix.yaml`, `asset-migration-ledger.yaml`,
++`behavior-preservation-manifest.yaml`, `source-consumer-closure.yaml`,
++`role-neutrality-scan.yaml`, `doctor-fix-inventory.yaml`,
++`migration-diagnostics.schema.json`, `docs-authority-audit.yaml`,
++`coverage-transfer.yaml`, `public-gastown-pin-ledger.yaml`,
++`version-skew-matrix.yaml`, and `acceptance-proof-matrix.yaml`.
++
+ Public pack cache state uses ordinary remote-pack cache entries keyed by
+ normalized source, commit, and subpath. Cache entries store source provenance,
+ pack digest, manifest digest, and validation timestamp. Historical synthetic
+@@ -509,6 +625,16 @@
+   role-name references, retired-source string classifiers, bare tmux cleanup,
+   old bootstrap import paths, and copied production Core fixture directories
+   outside generated allowlists.
++- `go test ./internal/systempacks -run 'RequiredDescriptor|GateBinding|RuntimeGuard|BypassAllowlist'`
++  proves descriptor-id binding, copied-Core rejection, user-imported `core`
++  collision rejection, stale/corrupt materialization blocking, provider-pack
++  selection confinement, and API/controller behavior-changing guard coverage.
++- `go test ./internal/packsource ./test/packlint/... -run 'ActiveRoots|Enumerator|RetiredSource|RoleSurface'`
++  proves active enumerators consume classifier-filtered roots and raw pack-root
++  walks are rejected outside generated allowlists.
++- `go test ./internal/packevidence ./test/packcompat -run 'BehaviorEvidence|PinnedPublicGastown|PinCoherence'`
++  proves manifest freshness, one-row-per-trigger extraction, exact public pin
++  provenance, synthetic-alias rejection, and compatibility/activation modes.
+ 
+ Behavior and compatibility tests:
+ 
+@@ -560,6 +686,41 @@
+ 
+ ## Rollout And Recovery
+ 
++### Decomposition Readiness Gate
++<!-- REVIEW: added per rollout-decomposition-gates -->
++
++Before full Gas City implementation decomposition, only external-prerequisite
++and proof-producing beads may be created: public `gascity-packs` ownership and
++pin work, support-artifact generators and validators, non-mutating inventory
++scans, packcompat harness work, and docs/schema golden generation. Gas City
++source deletion, Maintenance removal, public activation-pin consumption,
++runtime-state mutation, automatic doctor repair, or behavior-changing loader
++cutover waits until AC6, AC7, AC14, AC15, AC16, and AC17 support artifacts
++exist, validate, and are cited by immutable commit or checked path.
++
++AC17 acceptance-to-proof matrix rows are required before implementation
++approval:
++
++| AC | Proof artifact or command | Gate placement | First dependent slice |
++| --- | --- | --- | --- |
++| AC1 | Requirements schema review against `requirements.schema.md` | design gate | already complete before this plan |
++| AC2 | `go test ./internal/systempacks ./cmd/gc -run 'RequiredCore|ControllerOnly|FreshCity'` | local CI | Slice 4a |
++| AC3 | `support/pack-resolution-matrix.yaml` plus validator and collision tests | local CI | Slice 4a |
++| AC4 | `go test ./cmd/gc ./test/packcompat -run 'GastownInitPublicPin|FreshGastown'` | deterministic public-pack CI | Slice 2 |
++| AC5 | `support/source-consumer-closure.yaml` plus retired Maintenance registry/cache tests | local CI | Slice 5b |
++| AC6 | `support/asset-migration-ledger.yaml` with source snapshot and split-row validator | manual audit plus local CI | Slice 1a |
++| AC7 | `support/behavior-preservation-manifest.yaml` plus packcompat witness checks | deterministic public-pack CI | Slice 1b |
++| AC8 | `support/role-neutrality-scan.yaml` and generated/materialized absence scans | local CI | Slice 3 |
++| AC9 | Binding tests for default, renamed, omitted, disabled, and no-executor cities | local and process CI | Slice 4a |
++| AC10 | Doctor upgrade matrix, repair idempotence, TOML preservation, and live-controller refusal tests | process/integration CI | Slice 4b |
++| AC11 | `support/migration-diagnostics.schema.json` plus text/JSON golden diagnostics | local CI | Slice 4a |
++| AC12 | `support/docs-authority-audit.yaml`, terminology matrix, and docs/help goldens | docs CI | first operator-facing slice |
++| AC13 | `support/coverage-transfer.yaml` mapping retired tests to replacement coverage | local CI | Slice 5b |
++| AC14 | Public Gastown checkout or pinned-cache validation transcript with in-tree fallback disabled | release gate | Slice 1b |
++| AC15 | `support/public-gastown-pin-ledger.yaml`, `support/version-skew-matrix.yaml`, and pin-coherence gate | release gate | Slice 2 and Slice 5a |
++| AC16 | Network-disabled cache hit/miss, digest mismatch, stale alias, missing subpath, and concurrent promotion tests | process/integration CI | Slice 2 |
++| AC17 | `support/acceptance-proof-matrix.yaml` validating AC1-AC16 evidence availability | design gate before bead creation | all implementation slices |
++
+ Slice 1a is the public Gastown ownership prerequisite. Land ownership rows for
+ every Gastown, Maintenance, provider-overlay, Dog prompt, review-check,
+ shutdown-dance example, branch-pruning, role-theme, and tmux behavior surface.
+@@ -629,6 +790,23 @@
+ freshness gates. Rollback is to restore the source tree from git and revert
+ docs in the same change.
+ 
++Slice-to-gate table:
++
++| Slice | May start when | Must pass before merge | One-way boundary |
++| --- | --- | --- | --- |
++| 1a public ownership | AC6 ledger generator exists | ownership rows, source snapshot, split-row validation | none in Gas City |
++| 1b compatibility proof | 1a rows are closed | AC7, AC14 compatibility transcript, fallback-disabled proof | no Gas City pin change |
++| 1c activation proof | 1b compatibility pin is immutable | host-Core/no-Maintenance transcript and activation pin row | no Gas City source deletion |
++| 2 compatibility-pin adoption | AC15/AC16 cache schema proof exists | pin-coherence, stale-alias rejection, offline cache matrix | first public pin consumed |
++| 3 Core extraction | AC8 role scan and bootstrap inventory exist | old import/path scanner, fixture guard, hook overlay proof | old Core package may be deleted only after scanner passes |
++| 4a systempacks loader | AC3 matrix and AC11 diagnostics schema exist | descriptor gate tests, runtime guard, bypass scanner | behavior-changing loads route through `internal/systempacks` |
++| 4b doctorfix | AC10 inventory exists | lock/journal/failure-injection tests and report-only conversion | automatic fixes use only `internal/doctorfix` |
++| 4c runtime-state migration | 4b coordinator is active | marker, quiesce, old-binary, downgrade, and re-upgrade tests | marker schema published |
++| 5a activation candidate | 1c activation proof and 4a loader pass | no-Maintenance packcompat, duplicate-active gate, old/new binary matrix | activation pin consumed in candidate branch |
++| 5b Maintenance fold | 5a passes | source-consumer closure, coverage transfer, stale-state diagnostics | Maintenance removed from required host packs |
++| 6 registry/cache cleanup | 5b passes | registry absence, synthetic alias rejection, subpath cache proof | aliases retired after activation |
++| 7 stale source/docs deletion | all replacement tests and docs gates pass | docs/help/tutorial/doctor goldens and generated references | example pack sources deleted |
++
+ Release compatibility matrix:
+ 
+ | Gas City binary | Public Gastown pack | Expected behavior |

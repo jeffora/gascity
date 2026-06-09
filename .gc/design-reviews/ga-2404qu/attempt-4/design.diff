@@ -1,0 +1,660 @@
+diff --git a/.gc/design-reviews/ga-2404qu/attempt-4/design-before.md b/.gc/design-review-inputs/core-gastown-pack-migration/design.md
+index 195c3ebda..91ab6c621 100644
+--- a/.gc/design-reviews/ga-2404qu/attempt-4/design-before.md
++++ b/.gc/design-review-inputs/core-gastown-pack-migration/design.md
+@@ -7,7 +7,7 @@ artifact_root: /data/projects/gascity-fresh-main-20260604-VLKm8c/plans
+ requirements_file: /data/projects/gascity-fresh-main-20260604-VLKm8c/plans/core-gastown-pack-migration/requirements.md
+ status: draft
+ created_at: 2026-06-04T15:07:35Z
+-updated_at: 2026-06-07T00:30:00Z
++updated_at: 2026-06-07T02:23:08Z
+ ---
+ 
+ # Design: Core and Gastown Pack Split
+@@ -50,7 +50,7 @@ starts:
+ - Normal production `gc` config loading proves Core was materialized and
+   included in resolved provenance.
+ - Public Gastown behavior that will be removed from Gas City has already landed,
+-  has a behavior inventory row, and is verified from the exact pinned commit.
++  has a generated manifest row, and is verified from the exact pinned commit.
+ - `gc doctor --fix` is failure-atomic and byte-identical on healthy manifests.
+ - Stale `.gc/system/packs/maintenance` and `.gc/system/packs/gastown`
+   directories are ignored, diagnosed, and preserved, not deleted.
+@@ -77,7 +77,7 @@ record the blocker before moving or deleting behavior.
+ 
+ #### Source-Derived Behavior Manifest
+ 
+-The behavior inventory is generated from source discovery, not hand-curated
++The behavior manifest is generated from source discovery, not hand-curated
+ memory. The generator walks every old Gas City behavior-bearing source under
+ Core, Maintenance, Gastown examples, hook overlays, formulas, orders, prompts,
+ skills, shell scripts, doctor strings, route metadata, notification templates,
+@@ -210,10 +210,10 @@ imports. The implementation must add a state table covering at least:
+ 
+ | State or surface | Required decision |
+ | --- | --- |
+-| `.gc/runtime/packs/maintenance` | ignored legacy, migrated to Core, or manual diagnostic; never deleted by `doctor --fix`. |
+-| JSONL archive state | Core destination or ignored-legacy diagnostic with operator command guidance. |
+-| export cursors | Core destination or ignored-legacy diagnostic. |
+-| spawn-storm ledgers | Core destination or ignored-legacy diagnostic. |
++| `.gc/runtime/packs/maintenance` | legacy root preserved; selected state migrates to Core; conflicts are manual; never deleted by `doctor --fix`. |
++| JSONL archive state | migrates to `.gc/runtime/packs/core/jsonl-export-state.json` and `.bak` when Core destination is absent. |
++| export cursors | preserved inside the migrated JSONL state file. |
++| spawn-storm ledgers | migrates to `.gc/runtime/packs/core/spawn-storm-counts.json` when Core destination is absent. |
+ | order tracking and skips | preserved names, aliases, or explicit migration tests. |
+ | Maintenance-owned orders | Core generic owner or public Gastown owner, with no duplicate active order definitions. |
+ | public Gastown host-Core dependency | explicit no-import host dependency with patch behavior documented and tested. |
+@@ -259,6 +259,334 @@ system-pack integrity must either validate the full file set or prove unexpected
+ files cannot influence loaded formulas, orders, scripts, overlays, prompts, or
+ config.
+ 
++### Attempt 4 Review Resolution Contracts
++<!-- REVIEW: added per attempt4-global-blockers -->
++
++Attempt 4 resolves the remaining design choices instead of carrying them as
++implementation-time questions. These contracts supersede any earlier "decide
++later" wording in this document.
++
++#### Executable Source-Discovery Manifest
++<!-- REVIEW: added per attempt4-behavior-preservation-gate -->
++
++The canonical behavior manifest is machine-readable and source-derived. Human
++documentation is rendered from it; it is not the source of truth.
++
++Canonical Gas City path:
++`plans/core-gastown-pack-migration/behavior-manifest.generated.yaml`.
++
++Canonical public Gastown path:
++`gastown/docs/behavior-manifest.generated.yaml`.
++
++The generator must discover behavior-bearing assets from these roots before any
++Core move, Maintenance fold, public pin update, registry cleanup, or source
++deletion is allowed:
++
++- `internal/bootstrap/packs/core`
++- `examples/gastown/packs/maintenance`
++- `examples/gastown/packs/gastown`
++- `examples/gastown/*_test.go`
++- `cmd/gc` config-load, doctor, order, formula, sling, hook, and prompt tests
++- `test/packlint`
++- shell helpers and template fragments referenced from any discovered TOML,
++  Markdown, prompt, formula, order, or script
++
++Discovery follows references instead of only scanning directories. Formula
++`script`, template `{{template ...}}`, prompt-fragment, order, hook overlay,
++mail/nudge target, requester/detector, runtime-state path, named-session, and
++route metadata references each become rows or row dependencies.
++
++Each generated row must contain:
++
++- stable id derived from old owner, path, asset kind, and referenced symbol
++- old path and old witness test or source assertion
++- behavior trigger and observable output
++- helper dependencies and runtime-state paths
++- final owner: Core, public Gastown, provider pack, docs-only, or retired
++- final path and final witness test
++- required public Gastown commit when final owner is public Gastown
++- consuming Gas City `PublicGastownPackVersion` when Gas City stops owning it
++- explicit semantic delta/removal approval when behavior is not preserved
++
++CI must fail if the generated manifest differs from the checked-in manifest,
++if a moved/split/generalized/retired/helper-dependent asset lacks a row, or if
++any row lacks both old and final witnesses. `test/packcompat` consumes the
++manifest and executes one assertion per executable row. Path/count/existence
++checks are not enough; rows must exercise the original trigger through normal
++config resolution and verify the same observable behavior or the approved
++delta.
++
++Removed tests also require rows. `examples/gastown/maintenance_scripts_test.go`
++is split into generated groups before implementation starts: Core-bound script
++tests, public-Gastown script tests, provider-pack tests, and approved removals.
++No test function from that file may disappear without a manifest row naming its
++replacement test or removal approval.
++
++#### Public Gastown Host-Core Contract
++<!-- REVIEW: added per attempt4-public-gastown-host-core-contract -->
++
++Chosen model: Core is an auto-included host system pack owned by the Gas City
++binary. Public Gastown does not import Core. Public Gastown may patch host Core
++configuration only through the normal resolved-config patch mechanism after
++required system packs have been inserted into the base layer.
++
++Config layer order for a Gastown city is:
++
++1. required host system packs: Core plus provider packs
++2. city and rig imports, including public Gastown
++3. patches and overrides from later layers, including public Gastown patches
++   against Core-defined agents
++4. city and rig local overrides
++
++`[[patches.agent]] name = "dog"` in public Gastown is valid only because `dog`
++is a Core pack agent in layer 1. The patch target is the resolved agent key
++after required system packs participate in config resolution. If Core is absent
++or the target agent is renamed in Core without a compatibility alias, config
++loading fails with a host-Core diagnostic; public Gastown does not silently
++create a replacement Core agent.
++
++Required tests:
++
++- host Core present + public Gastown: `dog` patch applies and the effective
++  work directory/theme fields match the Gastown patch.
++- host Core absent: load fails with "required host Core missing" before any
++  Gastown behavior executes.
++- no Maintenance present: public Gastown plus host Core resolves agents,
++  prompts, formulas, hooks, and orders through the normal production loader.
++- stale local Gastown/Maintenance import: doctor can diagnose and fix before
++  full config resolution.
++- custom Core import named `core`: load fails as an unsupported collision.
++
++Template fragments are owned by the pack whose prompt references them. Core
++`dog` prompts may reference only Core-owned fragments; public Gastown prompts
++may reference only public-Gastown fragments. Shared fragments must be duplicated
++or moved to a provider-neutral Core fragment with an explicit Core prompt
++reference; there is no implicit cross-pack template lookup from Gastown to Core
++or Core to Gastown. `test/packcompat` must compile every Core and Gastown prompt
++template after the split and fail on unresolved fragments.
++
++Public Gastown pack scans must fail on hardcoded retired paths:
++`.gc/system/packs/maintenance`, `.gc/runtime/packs/maintenance`,
++`packs/maintenance`, and `../maintenance`, except in migration docs or tests
++listed in the manifest allowlist.
++
++#### Pre-Resolution Doctor And Legacy Import Recovery
++<!-- REVIEW: added per attempt4-doctor-pre-resolution-safety -->
++
++`gc doctor` gets a pre-resolution import migration phase that reads raw TOML
++for `city.toml` and rig `pack.toml` files before full config expansion. This
++phase is allowed to parse only import tables, source strings, versions, and
++comments needed for a preserving rewrite. It must not evaluate pack formulas,
++agents, hooks, templates, or orders.
++
++The pre-resolution phase handles:
++
++- local generated/system Gastown imports pointing at `.gc/system/packs/gastown`
++  or known generated `examples/gastown/packs/gastown`
++- local generated/system Maintenance imports pointing at
++  `.gc/system/packs/maintenance` or known generated
++  `examples/gastown/packs/maintenance`
++- relative `../maintenance` imports inside legacy local Gastown packs
++- stale locks for public Gastown commits older than
++  `internal/config/PublicGastownPackVersion`
++
++Fix behavior:
++
++- Generated or known example Gastown imports are rewritten to
++  `github.com/gastownhall/gascity-packs/gastown` at
++  `PublicGastownPackVersion` only after the remote commit is reachable,
++  installable, and lockable.
++- Active local development paths are not rewritten automatically. A path under
++  the current checkout, a dirty worktree, a non-generated pack, or a source
++  outside the known generated/system set is reported as manual.
++- Generated or known example Maintenance imports are removed only after Core is
++  materialized and public Gastown lock/install validation succeeds.
++- Relative `../maintenance` inside legacy Gastown is tolerated during the
++  pre-resolution diagnostic pass only. Normal production config loading still
++  fails on unresolved imports after doctor has had the chance to report the
++  actionable fix.
++- TOML edits are scoped and preserving. If comments, unknown tables, array
++  order, or formatting cannot be preserved, `gc doctor --fix` refuses and gives
++  manual steps.
++
++All mutating fixes are preflight-first and failure-atomic. Doctor discovers
++live controllers from runtime facts, not PID/status files, and refuses automatic
++multi-file fixes while a controller for the same city is running. Immediately
++before each rename, doctor re-reads the target file and aborts if it changed
++since preflight.
++
++#### Required Core Loader Bypass Inventory
++<!-- REVIEW: added per attempt4-loader-callsite-inventory -->
++
++The production loader scanner starts with this call-site inventory and shrinks
++it during the Core loading slice. New direct production `config.Load*` calls are
++forbidden unless they are added to the partial-read table with a reason and a
++focused test.
++
++| Current surface | Required disposition |
++| --- | --- |
++| `cmd/gc/cmd_import.go` import-edit reads | Use raw edit loader or pre-resolution import parser; never behavior-driving config. |
++| `cmd/gc/init_provider_readiness.go` readiness probes | Route through required-system-pack wrapper unless explicitly checking partial config. |
++| `cmd/gc/cmd_config.go` quick display reads | Split into `loadCityConfigRuntime` and `loadCityConfigPartialForExplain`. |
++| `cmd/gc/cmd_supervisor_city.go` reload reads | Route normal reload through required-system-pack wrapper and assert Core participation. |
++| `cmd/gc/cmd_rig.go` post-edit reloads | Route behavior-affecting reloads through wrapper; raw edit path remains partial. |
++| `cmd/gc/cmd_init.go` template/copy validation | Use a testable wrapper for initialized cities; allow raw reads only before a city exists. |
++| `cmd/gc/cmd_wait.go` legacy sanity load | Convert to wrapper or delete if redundant with API fallback. |
++| `cmd/gc/dolt_runtime_publication.go` publication reads | Route through wrapper; provider pack participation is part of the proof. |
++| `cmd/gc/cmd_start_drift.go` drift checks | Partial-read allowlist only if the file can be broken and still needs diagnostics. |
++| `cmd/gc/legacy_pack_preflight.go` legacy import preflight | Replace with the pre-resolution TOML import parser. |
++
++The refined interface names are:
++
++- `loadCityConfigRuntime`: normal command path, materializes required packs and
++  asserts participation.
++- `loadCityConfigNoRefreshRuntime`: controller/reload path, validates existing
++  required packs and asserts participation.
++- `loadCityConfigPartialForEdit`: raw TOML edit path, no behavior decisions.
++- `loadCityConfigPartialForDoctor`: pre-resolution diagnostic path, import
++  tables only.
++
++Scanner tests must reject direct calls to `config.Load`, `config.LoadCity`, and
++`config.LoadWithIncludes` in non-test `cmd/gc` files outside these helpers.
++They must also reject production use of non-OS filesystems for runtime loads.
++
++#### Bootstrap Extraction Completion Contract
++<!-- REVIEW: added per attempt4-bootstrap-fixture-isolation -->
++
++Production bootstrap owns no Core assets and still must have a non-nil asset
++filesystem. After removing `//go:embed packs/**`, `bootstrapAssets` defaults to
++a private empty `fs.FS` implementation that returns `fs.ErrNotExist` for all
++paths. It must never be `nil`.
++
++Bootstrap tests use inline `fstest.MapFS` fixtures, not copied production Core
++directories and not an on-disk `testdata/packs/core` tree. Fixture `Entry.Name`
++may remain `core` when testing collision semantics, but `AssetDir` points at the
++inline fixture path; the test must not imply production Core is still under
++bootstrap.
++
++Required changes in the Core extraction slice:
++
++- remove `internal/bootstrap/packs/core/embed.go` and its dual-embed comments
++- remove `"core"` and `"registry"` from `bootstrapManagedImportNames` in
++  `internal/config/compose.go` when `BootstrapPacks` is permanently empty
++- update the sync test so bootstrap-managed implicit imports are empty
++- update `cmd/gc/prompt_test.go`,
++  `internal/config/bundled_import_test.go`,
++  `examples/gastown/precompact_hook_test.go`,
++  `test/packlint/*`, and `internal/hooks/config/README.md` for the new
++  `internal/packs/core` path or fixture model
++- add `TestProductionBootstrapAssetsIsEmpty`
++- add `TestBootstrapFixtureIsMinimal`, failing if fixture assets contain
++  production-only directories such as `formulas/`, `orders/`, `overlay/`,
++  `skills/`, or `assets/prompts/`
++
++`GC_BOOTSTRAP=skip` is kept only as a bootstrap compatibility switch. It skips
++legacy bootstrap materialization, which is empty in production. It must not
++skip `MaterializeBuiltinPacks`, required Core materialization, required Core
++integrity validation, or config provenance checks. Tests must prove a command
++with `GC_BOOTSTRAP=skip` still materializes and verifies Core through the normal
++system-pack path.
++
++#### Concrete Runtime-State Migration
++<!-- REVIEW: added per attempt4-maintenance-runtime-state -->
++
++Retired Maintenance runtime state migrates to Core for continuity. The old
++Maintenance path is never deleted automatically.
++
++| Legacy state | New canonical state | Migration behavior |
++| --- | --- | --- |
++| `.gc/runtime/packs/maintenance/jsonl-export-state.json` | `.gc/runtime/packs/core/jsonl-export-state.json` | `gc doctor --fix` and the first Core `jsonl-export.sh` run copy/rename when Core destination is absent; if both exist and differ, report manual conflict. |
++| `.gc/runtime/packs/maintenance/jsonl-export-state.json.bak` | `.gc/runtime/packs/core/jsonl-export-state.json.bak` | Same rule as primary state. |
++| `.gc/runtime/packs/maintenance/jsonl-archive/` | `.gc/runtime/packs/core/jsonl-archive/` | Move only when Core destination is absent; preserve git remotes and refs; if both exist, diagnose and do not merge. |
++| JSONL push fields: `pending_archive_push`, `consecutive_push_failures`, `push_failure_escalated`, `last_push_at`, `last_push_stderr` | Same keys in Core state file | Preserve exactly through the state migration. |
++| `.gc/runtime/packs/maintenance/spawn-storm-counts.json` | `.gc/runtime/packs/core/spawn-storm-counts.json` | Move when Core destination is absent; if both exist, Core wins and legacy is reported as ignored. |
++| order skip/tracking beads for `mol-dog-*` orders | existing bead metadata/order names | Preserve order names or add aliases; no runtime file migration. |
++| script temp state passed explicitly by formula env | unchanged unless the script moves to Core-owned `GC_PACK_STATE_DIR` | Keep behavior row and test; do not silently reinterpret custom env paths. |
++| `GC_PACK_STATE_DIR` for Core-owned moved scripts | `.gc/runtime/packs/core` | Formula/order environment sets the Core path; scripts default to Core, not Maintenance. |
++| doctor JSONL fallback paths | Core first, then legacy Maintenance, then `.gc/jsonl-*` compatibility | `jsonl_archive_doctor_check.go` updates `resolveStateFile` and `resolveArchiveRepo` in the Maintenance folding slice. |
++
++This is a one-way runtime-state migration for new binaries. Rollback guidance
++must say that old binaries may continue reading legacy Maintenance state until
++the operator manually moves Core state back; doctor-mutated city manifests must
++remain readable by old binaries, but runtime-state rollback is advisory.
++
++#### Go Role-Neutrality Scope And Scanner
++<!-- REVIEW: added per attempt4-role-neutrality-scope -->
++
++Go de-roling is in scope for SDK behavior, default scaffolding, and Core-owned
++surfaces affected by this migration. Historical docs, Gastown examples, and
++tests that explicitly model user-configured roles may remain only through an
++allowlist.
++
++The scanner is a Go test that walks Go, TOML, shell, Markdown, templates, docs,
++generated CLI help fixtures, and Core assets. It tokenizes identifiers and
++string literals and rejects behavior-bearing references to `mayor`, `deacon`,
++`witness`, `refinery`, `polecat`, `boot`, `crew`, and `gastown` outside the
++allowlist. `dog` is allowed only for Core maintenance-agent configuration and
++explicit compatibility aliases.
++
++The migration inventory must include:
++
++- tmux theme/icon APIs such as `DogTheme`
++- default city scaffolding and warmup defaults
++- prompt fallback and generated prompt-help examples
++- `internal/sling` formula-name heuristics
++- `classifyAgentKind`
++- mail/nudge targets and notification examples
++- role-bearing TOML descriptions and generated docs
++
++If an implementation slice cannot remove a role surface safely, it must narrow
++the design claim for that slice and add an allowlist row naming the owner,
++reason, and removal follow-up.
++
++#### Rollout Gate Repairs
++<!-- REVIEW: added per attempt4-rollout-gate-repairs -->
++
++All cross-pack ownership audits happen before the public Gastown commit is
++pinned. Slice 1 cannot finish until `mol-review-quorum`, provider overlays,
++Dog prompt fragments, Polecat formulas, branch pruning, shutdown-dance examples,
++review checks, and hardcoded role-theme/tmux APIs have final Core/Gastown
++ownership rows and replacement tests.
++
++`test/packcompat` is introduced in the public-pin slice, but it has two modes:
++
++- current-loader compatibility: runs while the old binary still force-includes
++  Maintenance, proving the public pin is backward-compatible
++- no-Maintenance production-loader compatibility: runs in the first slice that
++  removes Maintenance from `requiredBuiltinPackNames`, after Core-owned
++  Maintenance behavior has moved to Core
++
++The design must not claim a no-Maintenance production-loader gate has passed
++until the normal production loader actually excludes Maintenance. No test-only
++loader bypass may be used to satisfy that gate.
++
++Every rollout slice runs `make test-fast-parallel` and `go vet ./...` unless a
++slice-specific note names a narrower gate and the next slice cannot start until
++the full gate is green. Slice 3 additionally runs `go test ./cmd/gc`,
++`go test ./internal/config`, and `go test ./test/packlint/...` because it
++updates hardcoded old bootstrap-Core paths outside `internal/bootstrap`.
++
++#### Docs And Operator-DX Anchor
++<!-- REVIEW: added per attempt4-docs-operator-dx -->
++
++`docs/reference/system-packs.md` is the canonical operator reference. The docs
++lint reads a wording matrix from the behavior manifest and checks doctor output,
++CLI help, tutorials, generated docs, pack comments, and script comments against
++these terms:
++
++- Core: required host system pack
++- `bd` and `dolt`: provider-dependent host system packs
++- Maintenance: retired standalone pack
++- Gastown: explicit public pack import
++- Core `dog`: configurable Core maintenance agent, not an SDK primitive
++- stale Maintenance paths: ignored legacy state or migrated runtime state,
++  never silently deleted
++
++Version-skew doctor output must compare the locked public Gastown commit with
++`PublicGastownPackVersion`. Older pins get an actionable warning and a
++non-mutating explanation; `gc doctor --fix` updates the pin only after the same
++preflight and preserving-edit rules described above.
++
+ ## Current System
+ 
+ `internal/builtinpacks/registry.go` defines the embedded pack set:
+@@ -345,7 +673,7 @@ Retire the Maintenance package:
+ Move Gastown assets out of the Gas City source tree:
+ 
+ - Remove `examples/gastown/packs/gastown` as a maintained pack source.
+-- Keep `examples/gastown` only as an example city, if still useful, with public
++- Keep `examples/gastown` as an example city with public
+   `gascity-packs/gastown` imports rather than local `packs/gastown` imports.
+ - Move pack-specific tests from `examples/gastown/gastown_test.go` to the
+   `gascity-packs` repo, or replace them with Gas City tests that assert init and
+@@ -427,10 +755,11 @@ fail on new Core-owned behavior references to Gastown roles.
+ 
+ ### Gastown Behavior Preservation
+ 
+-Add a behavior inventory in the `gascity-packs` repo, required path:
+-`gastown/docs/behavior-preservation.md`.
++Generate the source-derived behavior manifest described in
++`Executable Source-Discovery Manifest`, then render the public Gastown operator
++view to `gastown/docs/behavior-preservation.md`.
+ 
+-The inventory must list every moved or generalized asset with:
++The generated manifest must list every moved or generalized asset with:
+ 
+ - old path
+ - old behavior trigger, requester, detector, route metadata, notification
+@@ -445,7 +774,7 @@ The inventory must list every moved or generalized asset with:
+ - `gascity-packs` landing commit
+ - Gas City pin value that consumes the landing commit
+ 
+-This inventory is required for these high-risk moves:
++This manifest is required for these high-risk moves:
+ 
+ - Maintenance `dog` prompt to Core, with Gastown notification/requester behavior
+   preserved in Gastown prompts or formulas.
+@@ -458,23 +787,24 @@ This inventory is required for these high-risk moves:
+ - Core `gc-dispatch` skill split.
+ 
+ The public `gascity-packs/gastown/pack.toml` should be updated so comments no
+-longer describe an implicit Maintenance layer. Gastown should not import Core;
+-Core remains a required host system pack. Gastown may continue to patch the
+-Core `dog` agent for theming or work_dir behavior if that patch is the explicit
+-Gastown behavior, and the inventory should name that dependency.
++longer describe an implicit Maintenance layer. Gastown does not import Core;
++Core remains a required host system pack inserted before Gastown in normal
++config resolution. Gastown may continue to patch the Core `dog` agent for
++theming or work_dir behavior only through the host-Core patch contract above,
++and the generated manifest must name that dependency.
+ 
+ Before any Gas City source deletion or Core generalization lands:
+ <!-- REVIEW: added per blocker-behavior-preservation -->
+ 
+ - The `gascity-packs` PR or branch must be named in the implementation bead.
+-- The replacement commit must be immutable and recorded in both the inventory
++- The replacement commit must be immutable and recorded in both the manifest
+   and Gas City's `internal/config/PublicGastownPackVersion` value.
+ - The public pack must be fetched from the ordinary remote-pack install path,
+   not from a bundled synthetic alias.
+ - Gas City CI must run a gate that installs that exact commit into a fresh test
+   city, composes the moved formulas/orders, resolves moved scripts using
+   pack-relative paths, verifies hook overlays and configured agents, and checks
+-  every behavior inventory row.
++  every generated manifest row.
+ - The gate must fail if any test from `examples/gastown/gastown_test.go` or
+   `examples/gastown/maintenance_scripts_test.go` is removed without an explicit
+   row mapping it to a new `gascity-packs` test or a documented intentional
+@@ -482,10 +812,13 @@ Before any Gas City source deletion or Core generalization lands:
+ 
+ Recommended Gas City gate name:
+ `go test ./test/packcompat -run TestPinnedPublicGastownBehavior`.
+-The test should clone or install `github.com/gastownhall/gascity-packs/gastown`
+-at `PublicGastownPackVersion`, load it with host Core present and no
+-Maintenance pack, and assert that the behavior inventory is complete for the
+-removed in-tree assets.
++At pin-adoption time the test runs in current-loader compatibility mode. Before
++Maintenance is removed from required system packs, the same gate must run in
++no-Maintenance production-loader mode: clone or install
++`github.com/gastownhall/gascity-packs/gastown` at
++`PublicGastownPackVersion`, load it with host Core present and no Maintenance
++pack through the normal production loader, and assert that the generated
++manifest is complete for the removed in-tree assets.
+ 
+ ### Builtin Registry And Synthetic Cache
+ <!-- REVIEW: added per blocker-pack-registry-cache -->
+@@ -509,11 +842,11 @@ Update `internal/builtinpacks/registry.go`:
+ - Existing synthetic cache entries for public Gastown or Maintenance are stale
+   after this migration. They may remain on disk, but source resolution must not
+   select them for a public `sha:` pin.
+-- Fresh `gc init --template gastown` behavior must make a product decision:
+-  network-required public install is acceptable if the error clearly says the
+-  public Gastown pack could not be fetched. Offline fallback to embedded old
+-  Gastown is not allowed unless a deliberate compatibility cache is specified
+-  and tested against the same immutable public commit.
++- Fresh `gc init --template gastown` is network-required unless the ordinary
++  remote-pack cache already contains the exact public pin. If the public
++  Gastown pack cannot be fetched, the error must say fresh Gastown
++  initialization is unsupported offline without a pre-populated repository
++  cache. Offline fallback to embedded old Gastown is not allowed.
+ 
+ Update tests in `internal/builtinpacks/registry_test.go`:
+ 
+@@ -547,7 +880,7 @@ edits in formerly non-required generated packs.
+ | `MaterializeBuiltinPacks` | Generates/repairs Core, `bd`, and `dolt`; does not refresh or prune Maintenance/Gastown. | Missing/corrupt Core repair tests plus stale custom-file preservation tests. |
+ | Orders and scripts | Core-owned generic orders resolve from Core; Gastown-owned orders resolve from public Gastown. | Formula/order composition tests and pack-relative script execution tests. |
+ | Order skip lists | Preserved names continue to match; renamed orders have aliases or migration tests. | Existing skip-list compatibility tests. |
+-| Runtime state | Maintenance runtime paths are ignored-legacy, migrated to Core, or manual-diagnostic per state file. | Doctor diagnostics for each state-path class; no deletion on `--fix`. |
++| Runtime state | JSONL state/archive and spawn-storm ledgers migrate to Core; conflicting legacy state is manual; other stale Maintenance paths are ignored legacy. | Doctor diagnostics and first-run script migration tests; no deletion on `--fix`. |
+ | Doctor import fixes | Generated/example Maintenance imports removed; custom forks preserved with manual guidance. | Golden TOML preservation and fork-provenance tests. |
+ | Synthetic cache validation | Remaining bundled packs keep validation; retired aliases are never selected for new resolutions. | Stale synthetic-cache rejection tests. |
+ 
+@@ -666,12 +999,10 @@ Doctor fix safety contract:
+ - After a fix, doctor must re-run Core materialization/provenance validation and
+   public Gastown lock/install validation. A fix that leaves Core absent or the
+   public pack unresolved is an error.
+-- Runtime state under `.gc/runtime/packs/maintenance` must be classified before
+-  docs or diagnostics claim it is gone. JSONL archives, export cursors, storm
+-  ledgers, order tracking, and `jsonl_archive_doctor_check.go` state either get
+-  an explicit Core destination, an ignored-legacy diagnostic, or a manual
+-  migration note. `gc doctor --fix` must not delete these state paths in this
+-  migration.
++- Runtime state under `.gc/runtime/packs/maintenance` follows the concrete
++  runtime-state migration table above. JSONL state/archive and spawn-storm
++  ledgers move to `.gc/runtime/packs/core` when safe; conflicts are manual;
++  ignored legacy paths are never deleted by `gc doctor --fix`.
+ 
+ ### Bootstrap Cleanup
+ <!-- REVIEW: added per blocker-bootstrap-fixture -->
+@@ -681,22 +1012,33 @@ Doctor fix safety contract:
+ 
+ Use a single approach:
+ 
+-- Introduce a minimal synthetic fixture under
+-  `internal/bootstrap/testdata/packs/core`, used only by bootstrap tests.
+-- Make bootstrap tests inject a fixture filesystem explicitly; they must not
+-  read production Core assets from `internal/packs/core`.
+-- The fixture identity should remain `core` only if the test contract needs to
+-  prove legacy bootstrap metadata accepts a Core-shaped pack. Otherwise use
+-  `test-core` and update assertions to avoid implying it is production Core.
++- Make production `bootstrapAssets` a non-nil empty filesystem after the
++  production `packs/**` embed is removed; it returns `fs.ErrNotExist` for all
++  paths and is covered by `TestProductionBootstrapAssetsIsEmpty`.
++- Make bootstrap tests inject an inline `fstest.MapFS` fixture explicitly; they
++  must not read production Core assets from `internal/packs/core` and must not
++  copy production Core into `testdata`.
++- The fixture `Entry.Name` should remain `core` only if the test contract needs
++  to prove legacy bootstrap collision metadata accepts a Core-shaped binding.
++  `Entry.AssetDir` points at the synthetic fixture path and must not be
++  `packs/core` unless the inline fixture intentionally defines that path.
+ - The production `BootstrapPacks` default remains empty.
+ - Remove the production `//go:embed packs/**` dependency from
+-  `internal/bootstrap/bootstrap.go`. If a tiny compatibility embed remains, its
+-  path must name test/compatibility content and stay out of production
+-  bootstrap materialization.
++  `internal/bootstrap/bootstrap.go`.
++- Remove `core` and `registry` from `bootstrapManagedImportNames` in
++  `internal/config/compose.go` in the same slice that permanently empties
++  `BootstrapPacks`; update the sync tests so bootstrap-managed implicit imports
++  are empty.
+ - Add guards that fail on lingering imports of
+   `internal/bootstrap/packs/core`, `AssetDir: "packs/core"` outside the new
+   fixture tests, and file copies/hashes that still target the old production
+   Core path.
++- Add `TestBootstrapFixtureIsMinimal`, failing if inline fixtures include
++  production-only directories such as `formulas/`, `orders/`, `overlay/`,
++  `skills/`, or `assets/prompts/`.
++- Keep `GC_BOOTSTRAP=skip` only as a legacy bootstrap-materialization skip. It
++  must not skip `MaterializeBuiltinPacks`, required Core materialization,
++  required Core integrity validation, or config provenance checks.
+ - Add hook installation tests proving `internal/hooks` reads overlays from
+   `internal/packs/core` after bootstrap no longer owns Core assets.
+ 
+@@ -764,7 +1106,7 @@ public Gastown pin:
+ | --- | --- | --- |
+ | `mol-review-quorum` | Core only if role-neutral; otherwise Gastown. | Token scan plus formula composition test in final owner. |
+ | Gastown Codex overlay | Core only if it contains generic provider hook behavior; otherwise Gastown. | Overlay diff and hook installation test from final owner. |
+-| Dog prompt fragments | Core only for generic maintenance-agent behavior; Gastown notification/requester behavior moves to Gastown. | Behavior inventory rows and renamed-agent Core test. |
++| Dog prompt fragments | Core only for generic maintenance-agent behavior; Gastown notification/requester behavior moves to Gastown. | Generated manifest rows, prompt-template resolution tests, and renamed-agent Core test. |
+ | `mol-polecat-*` parent/child formulas | Gastown. | Gastown formula composition and migrated old-test mapping. |
+ | Review workflow checks | Core only for generic review quorum/check infrastructure; Gastown for role/prompt review flows. | Ownership table row plus packcompat test. |
+ | Branch pruning | Gastown. | Gastown order/script existence and execution test. |
+@@ -824,7 +1166,7 @@ In `gascity-packs`:
+ 
+ - Move Gastown pack behavior tests from `examples/gastown/gastown_test.go` or
+   recreate equivalent tests against `gastown/`.
+-- Add behavior-preservation tests for all inventory entries.
++- Add behavior-preservation tests for all generated manifest entries.
+ - Add a test-by-test migration matrix for
+   `examples/gastown/gastown_test.go`,
+   `examples/gastown/maintenance_scripts_test.go`, packlint/parser coverage,
+@@ -862,41 +1204,57 @@ Use a staged rollout to keep Gas City and `gascity-packs` in sync.
+ 
+ 1. Candidate public Gastown slice:
+    land `gascity-packs` Gastown behavior preservation on a branch, move/add
+-   Gastown-owned assets, add the behavior inventory, update Gastown tests, and
+-   record the immutable commit/hash. Required gates: `gascity-packs` test suite,
+-   behavior inventory completeness, formula/order composition, script execution,
+-   and old-test to new-test mapping.
++   Gastown-owned assets, add the generated behavior manifest, resolve all
++   cross-pack ownership audits, update Gastown tests, and record the immutable
++   commit/hash. This slice must decide `mol-review-quorum`, provider overlays,
++   Dog prompt fragments, Polecat formulas, branch pruning, shutdown-dance
++   examples, review checks, and hardcoded role-theme/tmux APIs before the pin is
++   consumed. Required gates: `gascity-packs` test suite, manifest completeness,
++   formula/order composition, prompt-template resolution, script execution,
++   clean scan for retired Maintenance paths, and old-test to new-test mapping.
+ 2. Gas City public-pin adoption and packcompat slice:
+    update `internal/config/PublicGastownPackVersion` to the immutable public
+    `gascity-packs/gastown` commit from slice 1 and add the Gas City
+-   pinned-public-pack compatibility test without deleting in-tree sources.
++   pinned-public-pack compatibility test in current-loader mode without
++   deleting in-tree sources or claiming no-Maintenance production-loader proof.
+    Required gates:
+    ordinary remote-pack install for the exact pin,
+    `go test ./test/packcompat -run TestPinnedPublicGastownBehavior`,
+    old-binary/new-pack compatibility proof,
+    stale synthetic-cache rejection for retired aliases,
+-   `go test ./examples/...`, and `make test-fast-parallel`.
++   `go test ./examples/...`, `make test-fast-parallel`, and `go vet ./...`.
+ 3. Core extraction slice:
+    move Core assets to `internal/packs/core`, update hooks and builtin registry
+    imports, and add bootstrap fixture isolation. Required gates:
+-   `go test ./internal/builtinpacks ./internal/hooks ./internal/bootstrap` and
+-   source guards for old bootstrap Core dependencies.
++   `go test ./internal/builtinpacks ./internal/hooks ./internal/bootstrap`,
++   `go test ./cmd/gc`, `go test ./internal/config`,
++   `go test ./test/packlint/...`, source guards for old bootstrap Core
++   dependencies, `make test-fast-parallel`, and `go vet ./...`.
+ 4. Core loading/doctor slice:
+    add the post-load Core provenance assertion, production `config.Load*`
+-   scanner, Core doctor, and safe import-state doctor edits. Required gates:
++   scanner, call-site migration/allowlist, Core doctor, pre-resolution import
++   recovery, version-skew diagnostics, and safe import-state doctor edits.
++   Required gates:
+    `go test ./cmd/gc -run 'BuiltinPack|ImportStateDoctor|CorePack|TryReloadConfig|MaterializeBuiltinPacks'`
+-   plus doctor golden/failure-atomic tests.
++   plus doctor golden/failure-atomic tests, `make test-fast-parallel`, and
++   `go vet ./...`.
+ 5. Maintenance folding slice:
+    move Core-owned Maintenance assets into Core, move Gastown-owned Maintenance
+-   assets to public Gastown, and apply the runtime retirement table. Required
+-   gates: formula/order/script behavior tests, stale directory preservation
+-   tests, runtime-state diagnostics, and provider pack continuity tests.
++   assets to public Gastown, remove Maintenance from `requiredBuiltinPackNames`,
++   update `jsonl_archive_doctor_check.go` to prefer Core runtime state, and
++   apply the runtime retirement table. Required gates: formula/order/script
++   behavior tests, stale directory preservation tests, runtime-state migration
++   and conflict diagnostics, provider pack continuity tests,
++   `go test ./test/packcompat -run TestPinnedPublicGastownBehavior` in
++   no-Maintenance production-loader mode, `make test-fast-parallel`, and
++   `go vet ./...`.
+ 6. Registry/cache cleanup slice:
+    remove Maintenance and Gastown from the embedded pack registry, retire public
+    synthetic aliases, and verify stale cache rejection. This slice must consume
+    the already-updated `PublicGastownPackVersion` from slice 2; it must not be
+    the first pin update. Required gates: registry/cache negative tests and
+-   packcompat test against the exact public pin.
++   packcompat test against the exact public pin, `make test-fast-parallel`, and
++   `go vet ./...`.
+ 7. Source deletion/docs slice:
+    remove in-tree `examples/gastown/packs/*` sources only after replacement
+    tests are green, migrate docs and examples, and apply docs lint/golden
+@@ -914,8 +1272,8 @@ Release compatibility matrix:
+ | --- | --- | --- |
+ | old binary | old pack | Existing behavior unchanged. |
+ | old binary | new pack | Public pack remains compatible with host Core and absence of Maintenance imports; no reliance on new Gas City-only loader behavior. |
+-| new binary | old pack | Fresh Gastown init pins the new pack, but existing locks to old public commits continue to load or doctor reports an actionable version-skew diagnostic without mutating custom content. |
+-| new binary | new pack | Core, provider packs, and public Gastown load without Maintenance; packcompat and behavior inventory gates pass. |
++| new binary | old pack | Fresh Gastown init pins the new pack, but existing locks to old public commits continue to load only far enough for pre-resolution doctor diagnostics; doctor reports an actionable version-skew/import diagnostic without mutating custom content. |
++| new binary | new pack | Core, provider packs, and public Gastown load without Maintenance; packcompat and generated-manifest gates pass. |
+ | rollback from new to old | any existing lock | Doctor-mutated manifests either remain readable by old binaries or the release notes name an explicit downgrade limitation and manual recovery path. |
+ 
+ Backward compatibility:
+@@ -936,7 +1294,7 @@ Backward compatibility:
+ Operational risk:
+ 
+ - The highest risk is losing Gastown behavior while generalizing Core. The
+-  behavior inventory and Gastown pack tests are the mitigation.
++  generated behavior manifest and Gastown pack tests are the mitigation.
+ - The second risk is stale assumptions in `cmd/gc` direct config loads. The
+   production call-site audit and Core presence doctor are the mitigation.
+ - The third risk is public pack version skew. Land `gascity-packs` first and

@@ -1,0 +1,46 @@
+# Camille Sato
+
+**Persona verdict:** block
+
+**Sources:** Claude, Codex, DeepSeek
+
+**Consensus findings:**
+- [Blocker] Required system-pack participation is not yet an implementable resolver-owned provenance contract. Claude and Codex both identify that the design names `RequiredSystemPackParticipation` without specifying the `internal/config` provenance API that mints trusted source identity, resolved layer identity, digest identity, import edge, and effective contribution during resolution. DeepSeek adds that if those records are owned by `internal/systempacks` while `internal/config` must consume or return them, the implementation risks a package layering violation or import cycle.
+- [Blocker] Bootstrap, repair, and partial-read paths are not concretely carved out from the fail-closed loader. Claude and Codex require a loader-bypass inventory and allowlist for current partial reads; DeepSeek correctly calls out the bricked-city failure mode where `gc init`, `gc doctor --fix`, or equivalent repair flows cannot run because Core is already missing or corrupt.
+- [Major] Gate 1 file-set validation and Gate 2 participation validation are directionally right but still need a precise proof source. The record must be minted from trusted required-pack descriptors supplied into config resolution, not reconstructed afterward from pack name, filesystem path, matching digest, or import shape. Tests must cover user or imported packs named `core`, copied Core trees, materialized-but-not-imported Core, and edges resolving away from the Gate 1 directory.
+- [Major] Fail-closed runtime readiness is still too easy to bypass if callers can receive a raw config and merely remember to call `RequireReady`. Claude and Codex both require a structural guard, ready-only accessor, or exhaustive entrypoint test coverage so dispatch, formula expansion, order evaluation, hook rendering, prompt resolution, session start, worker creation, API mutation, and controller scheduling cannot use stale or invalid behavior config.
+- [Major] Loader bypass containment needs a checked-in inventory and a syntactic AST/type-aware scanner contract. The current phrase "behavior-driving internal packages" is not a deny-by-default scope, and the allowlist cannot depend on the scanner proving semantic harmlessness. It should match approved files, functions, call kinds, and manual include assembly while carrying a human-reviewed reason plus focused tests for each exception.
+- [Major] Live reload and strictness boundaries are underspecified. Required Core/provider file-set integrity and participation gates must be non-disableable by `--no-strict`, no-refresh reloads must not repair or write, and degraded mode must expose one stable diagnostic/event while refusing behavior-changing operations.
+- [Major] Materialization and locking behavior is not pinned. Routine read-only commands and status/reporting routes should validate without exclusive repair locks or filesystem mutation; repair/self-heal should be explicit, bounded, non-interactive, and safe around operator-edited system-pack files.
+- [Minor] The scanner target list references `config.LoadCity`, which is not a real symbol in the current codebase.
+
+**Disagreements:**
+- Claude and Codex return `approve-with-risks`; DeepSeek returns `block`. My assessment is `block` because trusted participation provenance and bootstrap/repair escape hatches determine whether the loader can fail closed without either accepting spoofed Core or bricking repair workflows.
+- Claude and Codex phrase the provenance issue as a major design gap; DeepSeek frames it as a package dependency-cycle blocker. These are compatible: the design can resolve both by defining descriptor and participation types in `internal/config` or a lower leaf package, and by requiring the resolver to emit the records.
+- Claude uniquely blocks on a requirements/design contradiction: AC2 names `internal/bootstrap/packs/core` as the canonical Core source authority, while the implementation plan moves Core to `internal/packs/core` and removes the bootstrap path as an asset source. I assess this as a real blocking prerequisite because participation provenance cannot be trusted until the canonical authority is unambiguous.
+- Only DeepSeek names `gc init` and `gc doctor --fix` as a blocker. Claude and Codex still require a concrete partial-read inventory, so the synthesis treats bootstrap and repair as blocking until those flows are explicitly classified.
+- Claude flags the existing `--no-strict` downgrade path; Codex asks for concrete reload corruption tests; DeepSeek focuses on no-refresh writes and lock contention. My assessment keeps this as Major rather than Blocker because the intended degraded behavior is stated, but the strictness, repair, and test contract must be explicit.
+- Reviewers vary on scanner detail. The combined requirement is a practical one: an AST/type-aware syntactic scanner plus a generated allowlist with human-reviewed reasons, not a static analyzer that tries to prove arbitrary downstream behavior.
+
+**Missing evidence:**
+- The authoritative Core source path that AC2 and the implementation plan both use for descriptor identity, embedded source identity, and source-consumer closure.
+- A concrete `internal/config` provenance or resolved-layer API that records trusted required-pack descriptor id, embedded source identity, materialized directory, content-manifest digest, file-set digest, `pack.toml` digest, resolved layer id, import edge, collision result, effective contribution, freshness, diagnostic id, and allowed-use mode.
+- The package ownership for `RequiredDescriptor`, `RequiredSystemPackParticipation`, and any `config.WithRequiredSystemPacks` option, with no upward dependency from `internal/config` to `internal/systempacks`.
+- A checked-in inventory mapping current production `config.Load*`, `LoadWithIncludesOptions`, `loadCityConfig*`, `builtinPackIncludes*`, TOML-peek, pack-discovery, provider-selection, and manual include assembly paths to runtime loader use or partial-read allowlist entries.
+- Bootstrap and repair rules for `gc init`, doctor diagnostics, doctor fix flows, config editing, and status/reporting when required packs are missing, corrupt, stale, shadowed, or missing participation.
+- Test names and fixtures for user/imported `core`, copied Core tree, manually imported Core path, symlink/path collision, repaired-but-not-merged Core, materialized-but-not-imported Core, provider pack participation for `bd` and `dolt`, and required-provider changes during no-refresh reload.
+- A named ready/degraded snapshot API or accessor model, plus tests covering every behavior-changing controller, API, dispatch, hook, prompt, formula, order, worker, and session-start surface.
+- The event type, registered payload, diagnostic/doctor id, repeated-failure behavior, and operator-visible CLI/API status path for live reload failures.
+- Locking and mutation rules for normal materialization, no-refresh validation, explicit repair, concurrent CLI invocations, and operator-edited or unclassifiable system-pack files.
+- Whether generated/API code and helper wrappers are in scanner scope or represented in the allowlist.
+
+**Required changes:**
+- Reconcile AC2 and the implementation plan on the canonical Core source authority before decomposition; either retarget the approved requirement or keep Core at the bootstrap source path.
+- Define descriptor and participation types in `internal/config` or a lower leaf package, and state that `internal/systempacks` supplies trusted required-pack descriptors while `internal/config` mints participation records during resolution.
+- Require Gate 2 to validate the exact Gate 1 descriptor target: resolved import edge, resolved layer id, effective contribution, materialized directory, and digests must all match the same trusted descriptor, with no fallback to path, name, or digest coincidence.
+- Add an explicit bootstrap/repair protocol: either allowlisted partial reads for `gc init`, doctor diagnostics, and doctor fix flows, or a dedicated bootstrap mode whose allowed behavior is limited to initialization/materialization/repair.
+- Add a generated loader-bypass inventory and allowlist artifact with schema, generator command, output path, owner, allowed mode, fields consumed, reason, freshness test, and focused non-behavior tests for every exception.
+- Make readiness structural: behavior-changing code should consume a ready-only snapshot/accessor or be covered by a scanner/test proving `RequireReady(op)` happens before any behavior config is used.
+- State that required-pack integrity and participation gates are not disabled by `--no-strict`; no-refresh reloads perform no repair, keep last-known-good only for read-only reporting, and refuse behavior-changing work with the same diagnostic id.
+- Specify materialization and locking boundaries so read-only validation does not write or take exclusive repair locks, while explicit repair is bounded, non-interactive, and safe around local operator edits.
+- Replace `config.LoadCity` in the scanner target list with the real loader symbols and include `LoadWithIncludesOptions` if that call path remains reachable.

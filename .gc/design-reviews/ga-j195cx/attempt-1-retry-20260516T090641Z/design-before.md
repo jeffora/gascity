@@ -1,0 +1,275 @@
+# Formula Compiler Requirements v0
+
+| Field | Value |
+|---|---|
+| Status | Proposed |
+| Date | 2026-05-09 |
+| Author(s) | Codex |
+| Issue | [gastownhall/gascity#1760](https://github.com/gastownhall/gascity/issues/1760) |
+| Supersedes | `contract = "graph.v2"` as the user-facing formula compiler requirement |
+
+Design for replacing the formula `contract` field with an explicit
+requirements table that declares the minimum formula compiler capability a
+formula needs.
+
+## Problem
+
+Formula v2 currently uses:
+
+```toml
+formula = "code-review-loop"
+version = 2
+contract = "graph.v2"
+```
+
+This mixes three separate ideas:
+
+- formula artifact revision
+- formula file/compiler compatibility
+- the current graph compiler implementation name
+
+After review, formula artifact revision should not live on individual formula
+files. The existing integer `version` field should not be repurposed into
+formula semver. Formulas are distributed through packs, and pack version, pack
+ref, or pack commit SHA is the durable way to identify the exact authored
+workflow a consumer is using.
+
+That leaves the current `contract` field. Its real purpose is not to describe a
+runtime contract and not to select a compiler at execution time. It is a
+minimum requirement: this formula uses constructs that require a compiler with
+formula-v2 capability.
+
+## Goals
+
+1. Give formulas a standard way to declare minimum compiler requirements.
+2. Make clear that formulas do not select the compiler implementation.
+3. Remove formula-level artifact versioning from the design.
+4. Preserve pack-level version/ref/SHA as the consistency mechanism for formula
+   consumers.
+5. Keep the current `[daemon] formula_v2` feature flag as the operator opt-in
+   for formula-v2 compilation.
+6. Provide a migration path from `contract = "graph.v2"` without breaking
+   existing formulas immediately.
+
+## Non-Goals
+
+- Versioning individual formulas independently from their containing pack.
+- Adding runtime compiler selection.
+- Adding multiple formula compiler implementations.
+- Changing formula layer resolution or filename-based shadowing.
+- Changing pack semver, pack imports, or remote pinning behavior.
+
+## Decision
+
+Add a top-level `[requires]` table to formula files:
+
+```toml
+formula = "code-review-loop"
+
+[requires]
+formula_compiler = ">=2"
+```
+
+`requires.formula_compiler` declares the minimum formula compiler capability
+needed to parse and compile the formula. It is a requirement expression, not a
+selector.
+
+The active Gas City binary decides which compiler path to use. For v0, the
+mapping is simple:
+
+| Requirement | Meaning |
+|---|---|
+| omitted | Formula only requires the default compiler capability |
+| `>=2` | Formula requires formula-v2 graph compiler capability |
+
+If `[daemon] formula_v2 = false`, a formula requiring compiler capability `>=2`
+must fail with an actionable error that tells the operator to enable
+`[daemon] formula_v2` or use a formula that does not require compiler v2.
+
+## Why `requires`
+
+`requires` is the standard package/config term for constraints that must be
+satisfied by the host toolchain. It communicates the important boundary:
+
+- the formula declares what it needs
+- the host decides whether it can satisfy that need
+- the formula does not choose the compiler at execution time
+
+This is more precise than `contract`, which sounds like an interface agreement,
+and more precise than `schema`, which suggests the physical file format.
+
+## Formula Artifact Versioning
+
+Formula files should not carry their own semver field.
+
+Consumers who need consistency should pin the containing pack:
+
+- by semver when using a released pack version
+- by tag or branch when appropriate
+- by commit SHA when exact reproducibility matters
+
+This keeps the existing pack model as the single distribution and revision
+boundary. A formula's identity remains its resolved formula name and winning
+file in the formula layer stack. Its authored revision is the pack revision
+that provided that winning file.
+
+## Proposed TOML Surface
+
+### Default compiler capability
+
+```toml
+formula = "simple-review"
+
+[[steps]]
+id = "review"
+title = "Review the change"
+description = "..."
+```
+
+No `[requires]` table means the formula can compile with the default formula
+compiler capability.
+
+### Formula-v2 compiler capability
+
+```toml
+formula = "code-review-loop"
+
+[requires]
+formula_compiler = ">=2"
+
+[[steps]]
+id = "review"
+title = "Review the change"
+description = "..."
+
+[steps.retry]
+max_attempts = 3
+on_exhausted = "soft_fail"
+```
+
+The exact v2-only fields are validated by the formula package. If a formula uses
+v2-only constructs without declaring `requires.formula_compiler = ">=2"`,
+validation should fail with a direct message that names the missing requirement.
+
+## Requirement Expression
+
+V0 should support only the expression forms needed for current formula compiler
+capabilities:
+
+| Expression | Meaning |
+|---|---|
+| `>=1` | Default compiler capability |
+| `>=2` | Formula-v2 compiler capability |
+
+The field is a string so future versions can expand to semver-style ranges if
+formula compiler capability becomes more granular:
+
+```toml
+[requires]
+formula_compiler = ">=2.1"
+```
+
+V0 does not need to implement the full semver range grammar. It should reject
+unknown or unsupported expressions rather than silently accepting them.
+
+## Compatibility With `contract`
+
+`contract = "graph.v2"` should become a deprecated compatibility alias for:
+
+```toml
+[requires]
+formula_compiler = ">=2"
+```
+
+V0 behavior:
+
+- If only `contract = "graph.v2"` is present, treat it as
+  `requires.formula_compiler = ">=2"` and emit a deprecation warning on
+  CLI-facing paths.
+- If both are present and agree, compile and emit a deprecation warning for
+  `contract`.
+- If both are present and disagree, fail validation.
+- If `contract` has any value other than `graph.v2`, fail validation as today.
+
+The warning should point to the exact replacement:
+
+```text
+contract = "graph.v2" is deprecated; use [requires] formula_compiler = ">=2"
+```
+
+## Validation Rules
+
+1. `requires.formula_compiler` must be a supported requirement expression.
+2. Formula-v2-only constructs require `requires.formula_compiler = ">=2"` or the
+   deprecated `contract = "graph.v2"` alias.
+3. A v2 compiler requirement requires `[daemon] formula_v2 = true` at compile
+   time.
+4. `version` should not be used as a formula artifact version. The current
+   requirement that formula `version >= 1` must be relaxed for new formulas
+   that use `[requires]`.
+5. The existing integer `version` field may remain only as legacy input until a
+   separate cleanup removes or ignores it.
+6. Requirement checking belongs in `internal/formula`; CLI, orders, and sling
+   should consume the normalized result rather than re-implementing the rules.
+
+## Normalized Model
+
+The parser should normalize formula requirements into an internal shape that is
+not tied to TOML spelling:
+
+```go
+type Requirements struct {
+    FormulaCompiler string `json:"formula_compiler,omitempty" toml:"formula_compiler,omitempty"`
+}
+```
+
+The formula model can then expose:
+
+```go
+type Formula struct {
+    Formula  string        `json:"formula"`
+    Requires *Requirements `json:"requires,omitempty" toml:"requires,omitempty"`
+
+    // Deprecated: use Requires.FormulaCompiler.
+    Contract string `json:"contract,omitempty" toml:"contract,omitempty"`
+}
+```
+
+Compiler selection code should not keep checking raw `Contract`. It should ask
+whether the normalized formula requirements require compiler capability v2.
+
+## Migration Plan
+
+1. Add `Requires` to the formula data model.
+2. Add parser and validation tests for:
+   - omitted requirements
+   - `formula_compiler = ">=2"`
+   - deprecated `contract = "graph.v2"`
+   - conflicting `contract` and `[requires]`
+   - v2-only constructs missing the requirement
+3. Relax formula validation so new formulas do not need the legacy integer
+   `version` field.
+4. Replace `declaresGraphV2Contract` with a normalized requirement check.
+5. Keep the existing `[daemon] formula_v2` gate on the v2 requirement path.
+6. Update built-in and example formula-v2 files to use `[requires]`.
+7. Update docs and error messages to stop recommending `contract = "graph.v2"`.
+8. After one migration window, decide whether to remove `contract` support or
+   keep it as a legacy alias with warnings.
+
+## Open Questions
+
+1. Should the field allow only `>=2` in v0, or should it also accept exact `2`
+   as sugar?
+2. Should deprecation warnings be attached to `Formula` diagnostics, or only
+   surfaced by CLI compile/dispatch paths?
+3. When `version` appears in a formula file, should v0 warn, ignore silently, or
+   continue preserving it as legacy metadata?
+
+## Consequences
+
+- Formula consistency remains anchored at the pack revision boundary.
+- The formula header becomes clearer: it declares requirements, not artifact
+  identity and not runtime compiler choice.
+- Existing graph-v2 formulas keep working through a compatibility alias.
+- The eventual removal of `contract` becomes a focused migration rather than a
+  broad formula-versioning redesign.

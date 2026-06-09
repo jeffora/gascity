@@ -1,0 +1,486 @@
+--- .gc/design-reviews/ga-j195cx/attempt-90/design-before.md	2026-05-12 02:34:33.240622650 +0000
++++ engdocs/design/formula-compiler-requirements.md	2026-05-12 05:05:41.607967429 +0000
+@@ -678,6 +678,87 @@
+ or create and retry is required because each touches different protected
+ boundaries.
+ 
++<!-- REVIEW: added per attempt-90-parser-caller-manifest-binding -->
++
++The table above is the seed vocabulary only. The checked implementation cannot
++preserve `18` as a hand-maintained proof. The `caller-preflight` suite is
++generated from the repository-wide caller manifest described below, and the
++generated count is the number of manifest rows whose `durable_write_boundary`
++or `preview_projection` field is non-empty. CI fails when a manifest row can
++write or project formula behavior and has no generated preflight matrix row,
++or when a preflight row does not point back to exactly one manifest row.
++
++The manifest-to-matrix join key is `caller_manifest_id`. Every matrix row in
++the `caller-preflight` suite stores:
++
++```yaml
++caller_manifest_id: cmd-gc-order-dispatch-filter-001
++source_kind: go | dashboard_ts | pack_formula | example | tutorial | prompt_template | generated_prompt
++occurrence_kind: compile_call | metadata_filter | durable_writer | shell_probe | prompt_producer
++durable_boundaries: [root, child, dependency, hook, convoy, retry_metadata, fanout_state, convergence_state, workflow_root_metadata, fired_order_metadata, artifact_ref]
++zero_write_fixture: internal/formula/testdata/zero_write/order-dispatch-disabled-host.yaml
++```
++
++`TestCallerManifestDrivesPreflightMatrix` compares the manifest, matrix rows,
++zero-write fixtures, and static raw-consumer scan in one assertion. A caller
++can move from `raw_consumer` to `accepted_artifact_only` only when its manifest
++row, matrix row, replacement API, and zero-write fixture change in the same
++PR. Prompt-template and tutorial rows are first-class producer candidates:
++any first-party prompt or example that can instruct an agent to run
++`gc bd mol wisp`, `gc bd mol burn`, `gc bd mol cook`, `gc bd mol cook-on`, or
++an equivalent molecule/materialization command must either be deleted,
++rewritten to a native compile/accept producer, or covered by a requires-only
++blocking diagnostic before first-party requires-only formulas are distributed.
++
++Construct detection runs before condition filtering. `if`, `when`, retry
++conditions, disabled steps, skipped compose branches, and order gates do not
++hide a v2-only authored construct from requirement validation. The validator
++classifies three states separately:
++
++| State | Meaning | Requirement effect |
++|---|---|---|
++| `authored_present` | raw field exists in a decoded formula, template, import, aspect, or generated prompt source | requires the registered minimum compiler capability |
++| `materialized` | graph expansion selected the construct for this compile | requires the registered minimum compiler capability and contributes to projection |
++| `condition_disabled` | construct is authored but would not execute for the current run | still requires the registered minimum compiler capability because an old compiler may fail to parse or project it |
++
++Every triggering construct has source attribution independent of the final
++graph transform:
++
++```go
++type ConstructTriggerAttribution struct {
++    ConstructID      string
++    DecodedPath      string
++    ContributionPath string
++    SourceFormat     string
++    SourcePath       string
++    SourceKey        string
++    SourceValue      string
++    Line             int
++    Column           int
++    ConditionState   string
++    ManifestID       string
++}
++```
++
++The compiler emits `formula.compiler_requirement_missing` at the
++`ConstructTriggerAttribution` source, not at the root formula by default. If
++several constructs trigger the same missing requirement, diagnostics are
++ordered by source path, line, column, construct id, then decoded path, and the
++matrix fixture records the full `diagnostic_count`. Fixture families must
++cover multiple triggering constructs in one formula, imported/aspect
++contributions, condition-disabled constructs, `expand_vars`, retry/check/
++`on_complete`, workflow metadata, convergence projections, JSON formulas, and
++conflicting legacy aliases in the same source.
++
++Unregistered `gc.*` metadata is not a v2-only workflow-control construct by
++prefix. It is either ordinary user metadata or a hard validation diagnostic
++depending on the owning metadata registry row. The registry fixture must name
++every compiler-owned workflow-control key and every generated `gc.kind` value.
++`TestWorkflowControlMetadataRegistryComplete` reflects over generated
++workflow-control writers and fails when a key or enum value is produced without
++a registry row, source attribution, matrix fixture, owner, and release-phase
++expiry for any legacy spelling.
++
+ Raw-shape and combined-defect rows are explicit:
+ 
+ | Input shape or defect set | Suite | First diagnostic / count rule |
+@@ -1973,6 +2054,47 @@
+ or a preview-only `CompileResult` without going through the compiler-owned
+ acceptance function.
+ 
++<!-- REVIEW: added per attempt-90-durable-writer-authority -->
++
++Accepted artifacts are the only authority at durable writer boundaries. This
++is enforced from the repository-wide caller manifest, not by manually auditing
++the current Go signatures. For every manifest row whose
++`durable_boundaries[]` is non-empty, `TestAllDurableWritersRequireAcceptedArtifact`
++loads the row, resolves the Go symbol or prompt/generated-command producer,
++and proves the replacement entry point receives one of:
++
++- `formula.AcceptedCompileArtifact`
++- an operation wrapper that embeds `formula.AcceptedCompileArtifact`
++- a parent/fragment pair whose fields both embed accepted artifacts
++- an explicit `preview_only` row that cannot open a bead store or mutate
++  metadata
++
++The same test fails when a production durable path accepts or consumes any of
++these as authorization: raw `Recipe`, raw `CompileResult`, caller-built
++metadata maps, root metadata strings, `bd` shell-out output, dashboard
++TypeScript projection data, generated prompt text, tutorial/example commands,
++or compatibility probe output. A compatibility probe may still produce release
++evidence, but it cannot be in the call graph before root, child, dependency,
++hook, convoy, retry, fanout, convergence, workflow-root, order-fired, or
++artifact-ref writes.
++
++Multi-write entries have all-or-nothing fixtures:
++
++| Entry | Boundaries snapshotted before fatal diagnostic |
++|---|---|
++| root cook / wisp launch | root, child, dependency, hook, convoy, workflow-root metadata, artifact ref |
++| attach / `on_complete` | attached child, dependency, hook, attachment metadata, continuation metadata |
++| order dispatch | fired metadata, order-run/tracking bead, wisp root, child, hook, convoy, route metadata, last-run/cooldown history |
++| retry/Ralph/scope-check/finalize | retry metadata, retry-run/check/finalizer bead, dependency, hook, outcome metadata |
++| fanout | parent fanout state, every fragment child, convoy link, continuation metadata |
++| convergence | root, iteration, retry metadata, replacement child, missing-child state, pending wisp, hook, dependency, convoy |
++| repair command | immutable artifact payload, root artifact-ref metadata, migration metadata, and every graph-control boundary |
++
++Every zero-write fixture includes a store snapshot before and after, plus a
++positive accepted-artifact row proving the same path still writes when the
++artifact is valid. A producer that writes several boundaries in one operation
++cannot claim coverage from a single root-only assertion.
++
+ <!-- REVIEW: added per attempt-50-durable-write-guards -->
+ 
+ This is enforced by blocking tests, not code-review convention:
+@@ -2796,6 +2918,49 @@
+ | `expired` | support window elapsed and external consumers have a named migration path | back to `active` only for a documented compatibility incident |
+ | `not-needed` | no external support obligation exists for this source class | to `active` when a supported external pack, SHA pin, or old reader is discovered |
+ 
++<!-- REVIEW: added per attempt-90-release-evidence-manifest -->
++
++Every migration gate consumes JSON as canonical input. Markdown files are
++rendered documentation only and must carry the source JSON digest. A release
++gate fails closed when the JSON is missing, malformed, stale, or names a
++placeholder value such as `0.x.y`, `<git-sha>`, or
++`<minimum-floor-from-formula-compiler-min-floor.json>` outside an explicitly
++marked template fixture.
++
++Release evidence artifacts:
++
++| Artifact | Owner | Generator command | Exit contract | Consumed by |
++|---|---|---|---|---|
++| `docs/release/formula-compiler-compatibility.yaml` | release captain | `gc formula validate --compat-corpus internal/formula/testdata/compat_corpus --write-compatibility-artifact` | `0` saved, `1` I/O/probe failure, `2` corpus diagnostic mismatch | minimum floor, alias window, alias removal |
++| `docs/release/formula-compiler-min-floor.json` | release captain | `gc formula validate --all-packs --write-min-floor docs/release/formula-compiler-min-floor.json` | `0` saved only with non-placeholder versions, `2` missing provenance/floor evidence | first-party requires-only conversion |
++| `docs/release/formula-compiler-first-party-inventory.json` | formula owner plus release captain | `gc formula validate --all-packs --first-party-inventory --json` | `0` full readable inventory, `1` unreadable/malformed source, `2` formula diagnostics or stale dual-declaration state | docs gate, pack-floor declaration, alias drain |
++| `docs/release/formula-compiler-external-support.json` | release captain | `gc formula validate --all-packs --external-support --json` | `0` all rows expired/not-needed, `1` acquisition/auth failures, `2` active or stale support rows | alias window and alias removal |
++| `docs/release/formula-compiler-alias-window-start.json` | release captain | `gc formula validate --alias-window-start --json --write ...` | `0` only when public notice, dual declarations, canonical metadata, docs bundle, stale CI, min-floor, compatibility, and external-support artifacts are all present | starts the two-minor-release/60-day clock |
++| `docs/release/formula-compiler-active-roots.json` | operator/release captain | `gc formula validate --active-roots --json --write ...` | `0` all active roots accepted/repaired/drained/waived, `1` store read failure, `2` unrepaired active roots | Phase 8 conversion |
++| `docs/release/formula-compiler-alias-drain.json` | release captain | `gc formula validate --alias-drain --json --write ...` | `0` two qualifying reports saved, `2` accepted alias/background alias/external active support remains | Phase 8 and Phase 9 |
++| `docs/release/formula-compiler-docs-check.json` | docs owner plus release captain | `make formula-docs-check` | `0` generated docs/help/schema/OpenAPI/TS/doctest checks pass, `2` stale guidance or missing generated artifact | any user-visible diagnostic surface |
++| `gc formula repair-root-artifact --dry-run --json` output | operator | command-specific invocation | `0` would-stamp/already-stamped, `1` I/O/store, `2` formula/identity/projection conflict | active-root repair and waivers |
++
++The active-root report schema includes `schema_version`, `generated_at`,
++`city`, `store_ref`, `release_captain`, `counts`, `roots[]`, and
++`waivers[]`. Each `roots[]` row records root id, status, source class, formula,
++artifact ref, content hash, requirement source, host capability, repair
++command status, owner, and whether it blocks Phase 8. A waiver row must name
++the root id, operator, timestamp, diagnostic code, reason, and cleanup or
++abandonment plan. Missing roots, unreadable stores, source ambiguity, missing
++content hash, downgraded host before repair, or unsupported future metadata
++blocks conversion; the report cannot assume "no active roots" from a failed
++query.
++
++`formula-compiler-alias-drain.json` is a sliding evidence window, not a
++single snapshot. It records the latest release candidate and the previous
++completed minor release, both input artifact digests, first-party
++`legacy_only`, `dual_declared`, and `background_accepted_alias` counts,
++external active-support counts, public notice URL, and alias-window start
++artifact digest. Empty arrays are evidence. Missing arrays, placeholder
++versions, missing public notice, packman schema below the declared provenance
++floor, or stale support rows make the drain command exit `2`.
++
+ First-party dual-declaration ownership belongs to the release captain until the
+ minimum-floor artifact allows requires-only distribution. Individual feature
+ PRs may add `[requires]`, but they may not remove first-party `contract`
+@@ -3280,6 +3445,79 @@
+ }
+ ```
+ 
++<!-- REVIEW: added per attempt-90-diagnostic-budget-contract -->
++
++Burst budget and producer policy are typed configuration owned by the producer
++surface, while the payload schema is owned by the formula diagnostic package.
++No producer may invent local cadence fields or persist warning counters inside
++accepted artifacts.
++
++```go
++type FormulaDiagnosticBurstBudget struct {
++    SchemaVersion       int
++    Window              time.Duration
++    InitialEvents       int
++    SummaryEvery        time.Duration
++    MaxEventsPerWindow  int
++    MaxChildrenPerRollup int
++    MaxStoredExamples   int
++    ResetOnConfigGeneration bool
++    ResetOnFormulaContentHash bool
++    ResetOnSubjectID bool
++    ResetOnProducerPolicyVersion bool
++}
++
++type FormulaDiagnosticProducerPolicy struct {
++    SchemaVersion   int
++    Producer        string
++    PolicyVersion   int
++    EmitsEvents     bool
++    EmitsRollups    bool
++    PersistsWarnings bool
++    DefaultBudget   FormulaDiagnosticBurstBudget
++    PayloadOwner    string // formula, order, convergence, controller, fanout, retry
++}
++```
++
++Default budgets are fixture-locked:
++
++| Producer | Events | Budget |
++|---|---|---|
++| direct CLI/API preview/dashboard polling | no Event Bus events and no durable rollup | synchronous response every call |
++| order dispatch | first event per `(subject, OnceKey, host, config generation)`, then one summary every 15 minutes | window 15m, `InitialEvents=1`, `MaxEventsPerWindow=2`, `MaxChildrenPerRollup=100` |
++| controller validation | same as order dispatch | window 15m, summary event only after occurrence count changes |
++| convergence | first event for create/retry/speculative failure, then summary every 15 minutes while blocked | window 15m, `MaxStoredExamples=20` |
++| fanout/retry/on_complete/workflow-finalize | first event per failing subject, then summary every 30 minutes | window 30m, grouped by parent root or workflow root |
++
++The policy row is included in every grouped diagnostic fixture. Reset semantics
++are exact: a successful config reload always starts a new group because
++`ConfigGeneration` changes; a failed reload never resets; formula content hash,
++subject id, producer id, or producer policy version changes reset the budget;
++process restart reloads persisted group and rollup state before applying
++in-memory suppression. A config flap `false -> true -> false` creates three
++observable lifecycle transitions: failing group, resolved group, new failing
++group with a new config generation. The old failing group remains historical
++and is not edited into the new one.
++
++Rollup lifecycle is explicit:
++
++| State | Transition in | Transition out |
++|---|---|---|
++| `active` | first fatal occurrence or warning occurrence that producer policy persists | `resolved`, `expired`, or `abandoned` |
++| `resolved` | next successful scan for the same subject and formula/config source | new `active` group if the diagnostic recurs with a new key |
++| `expired` | retention cleanup after no matching subject remains and release evidence no longer needs the row | none |
++| `abandoned` | operator closes or waives the subject with a reason | new `active` group only if the subject is reopened or recreated |
++
++`FormulaDiagnosticRollup` stores `LifecycleState`, `PolicyVersion`,
++`ResolvedAt`, `ResolvedBy`, `ResolutionReason`, `SuppressedEventCount`,
++`DroppedChildCount`, `ExampleDigest`, and `ETag`. Children beyond
++`MaxChildrenPerRollup` increment `DroppedChildCount` and contribute to
++`ExampleDigest`; they do not append unbounded metadata or Event Bus payloads.
++Fixtures cover repeated scans, restart before the second scan, successful and
++failed reload, config flaps, many disabled-host subjects, legacy-contract
++warning parity, immutable accepted warning snapshots, mutable producer warning
++counters, CAS loss, and grouped-state write failure.
++
+ The rollup grouping key is
+ `(rollup_class, code, remediation, host_source_path, host_source_key,
+ host_source_value, host_capability, config_generation)`. Children preserve the
+@@ -4469,6 +4707,31 @@
+ findings from unrelated uses of words such as "version" in Go, Node, release,
+ runtime, or pack-import documentation.
+ 
++<!-- REVIEW: added per attempt-90-docs-predecessor-gate -->
++
++The docs/check bundle is a hard predecessor to user-visible behavior, not a
++parallel workstream. The implementation branch that first exposes a diagnostic
++code or `[requires]` behavior must also make `make formula-docs-check` pass
++with no expected-failure baseline for that surface. A release gate may not cite
++"docs follow-up" as acceptance evidence.
++
++The check has four blocking output classes:
++
++| Output class | Fails when |
++|---|---|
++| `stale_guidance[]` | `contract`, `version = 2`, `GC_NATIVE_FORMULA=false`, `formula_v2`, or `formula_compiler` appears without the required legacy/migration/host-capability context |
++| `doctest_failures[]` | a TOML/JSON snippet does not parse, an invalid snippet lacks an expected diagnostic code, or a placeholder appears outside a `template_expected` fixture |
++| `generated_artifact_failures[]` | CLI help, config docs, OpenAPI, dashboard TypeScript, dashboard fixtures, release schemas, or PackV2 docs are stale against source |
++| `inventory_failures[]` | a first-party pack, example, tutorial, fixture, generated prompt, or docs snippet lacks a first-party inventory row and executable or explicitly invalid fixture |
++
++The stale-guidance matcher has explicit rows for legacy `version = 2`,
++canonical `contract = "graph.v2"` examples, `GC_NATIVE_FORMULA=false`,
++`formula_v2` wording that implies compiler selection, and `formula_compiler`
++examples that omit the top-level `[requires]` context. The report prints file,
++line, matcher id, excerpt, and remediation. Exceptions are data, not comments:
++they name path, line matcher, expiry phase, and why the stale wording is
++historical or intentionally invalid.
++
+ | Surface | Same-branch generated/doc artifacts |
+ |---|---|
+ | CLI diagnostics or help | `docs/reference/formula.md`, `docs/reference/cli.md`, generated Cobra help, runnable examples |
+@@ -4590,6 +4853,55 @@
+ while `docs/release/formula-compiler-min-floor.json` says
+ `first_party_requires_only_allowed: false`.
+ 
++<!-- REVIEW: added per attempt-90-rollout-dag-closure -->
++
++The rollout dependency graph is:
++
++```text
++1 parser/model
++  -> 2 compile result + docs/check seed
++  -> 3 dormant first-party floor declarations
++  -> 4a shared accepted-artifact APIs + blocking new-raw-consumer guard
++  -> {4b sling/CLI, 4c orders/controller, 4d API/generated clients, 4e convoy/sourceworkflow}
++  -> 4f convergence/molecule/fanout
++  -> 4g dashboard rendering
++  -> 5 compatibility bridge evidence refresh
++  -> 7a packman provenance contract
++  -> 7b pack-floor enforcement
++  -> 8 first-party requires-only conversion
++  -> 9 parser alias removal
++```
++
++Sub-phases 4b through 4e may proceed in parallel only after 4a is merged and
++only if their manifest rows and write boundaries do not overlap. Phase 4f must
++follow any sub-phase whose artifact it reuses or repairs, because convergence,
++molecule execution, and fanout are multi-write paths that can touch roots,
++children, hooks, convoys, retry metadata, fanout state, and convergence state.
++Phase 4g follows 4d because dashboard rendering must consume generated API
++types rather than inventing local diagnostic or workflow-root projections.
++
++Phase 4a is shared plumbing, not a claim that every existing caller has already
++migrated. Its deliverables are `CompileResult`, `AcceptedCompileArtifact`,
++projection snapshots, the accepted-artifact writer signatures, the shared
++workflow-root predicate, the repository-wide caller manifest, report-mode
++legacy allowlist, and a blocking guard for new raw consumers. Existing callers
++may remain on legacy wrappers only while first-party graph formulas stay
++dual-declared and requires-only distribution is blocked. A later producer
++sub-phase is complete only when that producer's rows move to
++`accepted_artifact_only` and its zero-write fixtures pass.
++
++Phase 8 and Phase 9 are separate release gates. Phase 8 edits first-party
++source to requires-only and is allowed only after packman schema 2 or an
++equivalent typed provenance artifact is present, pack floors are enforced
++before formula selection, minimum-floor versions are non-placeholder, the
++active-root report is clear or waived, and alias-drain evidence shows the
++conversion window is open. Phase 9 removes parser support for legacy
++`contract` only after Phase 8 has shipped, the alias-drain window has two
++qualifying reports, external support is expired or not-needed, and the
++alias-removal gate consumes JSON evidence directly. A rollback in Phase 8
++restores dual declarations and resets the alias-window clock; a rollback in
++Phase 9 restores parser alias support without changing accepted artifacts.
++
+ <!-- REVIEW: added per attempt-80-rollout-sequencing-lock -->
+ 
+ The chosen Phase 2/3 sequence is: first-party dual declarations and their green
+@@ -4927,6 +5239,82 @@
+   -> convergence durable writer
+ ```
+ 
++<!-- REVIEW: added per attempt-90-convergence-executable-flow -->
++
++The forbidden legacy flow is:
++
++```text
++load formula/root metadata
++  -> convergence subset parser or ValidateForConvergence reads raw fields
++  -> convergence creates root/iteration/retry metadata
++  -> formula diagnostics are projected afterward or not at all
++```
++
++The replacement flow is executable pseudocode:
++
++```go
++func createConvergence(ctx context.Context, input CreateInput) error {
++    host := formulahost.FromCityConfig(input.CityConfig, input.ConfigSource)
++    result := formula.CompileWithResult(ctx, input.FormulaName, input.SearchPaths, formula.CompileOptions{
++        Vars: input.CompileVars,
++        HostCapabilities: host,
++        ValidateRuntimeVars: true,
++    })
++    artifact, diagnostics := formula.AcceptCompileResult(result, input.CompileIdentity())
++    if fatal(diagnostics) {
++        return recordConvergenceDiagnostic(ctx, input.PreCreateSubject(), diagnostics)
++    }
++    if diagnostics := formula.ValidateAcceptedArtifact(artifact, input.WriteIntent("convergence_create")); fatal(diagnostics) {
++        return recordConvergenceDiagnostic(ctx, input.PreCreateSubject(), diagnostics)
++    }
++    view, diagnostics := convergence.ProjectAcceptedFormula(artifact)
++    if fatal(diagnostics) {
++        return recordConvergenceDiagnostic(ctx, input.PreCreateSubject(), diagnostics)
++    }
++    if diagnostics := convergence.ValidateProjection(view, input.RuntimeInputs(artifact)); fatal(diagnostics) {
++        return recordConvergenceDiagnostic(ctx, input.PreCreateSubject(), diagnostics)
++    }
++    return convergence.WriteRootAndFirstIteration(ctx, input.Store, artifact, view, input.WriteSet())
++}
++```
++
++Retry, next-iteration, manual iterate, missing-child repair, pending-wisp
++adoption, pending-wisp burn, and fallback pour use the same helper shape with a
++different `WriteIntent.Operation`. Reuse of a persisted artifact is allowed
++only when `ValidateAcceptedArtifact` receives the root's current artifact ref,
++expected identity hash, and same-identity write intent. If the selected
++formula, vars, options, search paths, pack binding, projection snapshot
++version, evaluate prompt identity, or content hash changes, the path compiles
++and accepts again against the current host capability before writing.
++
++`evaluate_prompt` is part of artifact identity because it can change
++convergence behavior without changing requirement syntax. Inline prompt
++content contributes `EvaluatePromptHash = sha256("inline" || source path/key ||
++raw bytes)`. Prompt paths contribute `EvaluatePromptHash = sha256("path" ||
++source path/key || resolved path || file content hash)`. Unreadable prompt
++paths fail in `ValidateProjection` before durable writes; readable prompt
++content is copied or content-addressed in the accepted projection so retry and
++repair do not reopen a different file silently. Redaction policy applies to
++runtime var values, not to evaluate-prompt content.
++
++Blocked-loop metadata is diagnostic state with one owner:
++
++| Metadata key | Meaning |
++|---|---|
++| `gc.convergence_waiting_reason` | `formula_requirement` |
++| `gc.convergence_waiting_operation` | create, retry, next_iteration, manual_iterate, speculative_pour, fallback_pour, missing_state_repair, missing_child_repair, pending_wisp_adoption, or pending_wisp_burn |
++| `gc.convergence_waiting_candidate_formula` | selected formula identity or pre-create subject |
++| `gc.convergence_waiting_once_key` | formula diagnostic `OnceKey` |
++| `gc.convergence_waiting_config_generation` | host config generation used for the failed preflight |
++| `gc.convergence_waiting_content_hash` | candidate formula content hash when available |
++| `gc.convergence_waiting_last_checked_at` | timestamp of latest preflight |
++
++These keys cannot authorize future writes. Clearing them requires a successful
++preflight for the same operation or explicit operator abandonment. They are
++updated through the grouped diagnostic CAS path and are separate from
++`gc.convergence_formula_compile_artifact`, the only convergence artifact-ref
++authority.
++
+ Field ownership is not shared:
+ 
+ | Field or concern | Owner | Consumer rule |
+@@ -5489,6 +5877,46 @@
+    Parser-only diagnostics that do not affect persisted behavior may avoid a
+    schema bump only with a fixture proving old-reader behavior is unchanged.
+ 
++<!-- REVIEW: added per attempt-90-future-capability-release-invariants -->
++
++Released construct capability rows are immutable release artifacts. The
++registry writes `docs/release/formula-compiler-construct-registry.json` during
++release validation with construct id, axis, minimum, owner, decoded paths,
++source-attribution fields, first release tag, and registry-owning binary SHA.
++After a row appears in a released artifact, a later change may append new rows
++or add a higher-capability row for a new construct shape, but it may not lower,
++remove, rename, or reinterpret the released row. If a bug requires changing a
++released row, the fix must add a new schema/versioned row and old-reader
++fixtures; it cannot edit history in place.
++
++First-party graph packs are validated with the latest registry-owning binary
++before publication. The publication gate records the binary SHA, registry JSON
++digest, pack refs, locked revisions, content hashes, and requirement-diff
++report. A pack cannot claim a minimum floor from an older registry artifact
++when the source uses constructs known only to a newer registry. External packs
++are allowed to set their own floor, but Gas City's resolver still evaluates
++the declared floor before formula selection and records the comparator binary
++in the external-support row.
++
++Behavioral identity and provenance remain separate for explicit defaults.
++Omitted `[requires]`, empty `[requires]`, and explicit
++`formula_compiler = ">=1"` have the same behavioral identity, accepted artifact
++deduplication, and workflow-root kind. Their different `RequirementSource`
++values are append-only diagnostic/provenance enum values. Production behavior
++cannot branch on them, and future enum additions cannot change existing
++runtime behavior without a new design and schema-versioned fixtures.
++
++Integer parsing is byte-bounded. The v0 grammar parser accepts only ASCII
++digits after the exact prefix `>=`, rejects leading signs, leading zeroes for
++multi-digit values, Unicode digits, whitespace, decimals, separators, and
++empty values, and detects overflow before converting to `int`. Overflow emits
++the fixture-locked invalid-syntax or parser-boundary diagnostic; it never wraps
++to a supported or unsupported future capability. Mixed manifests that combine
++unknown axes, malformed axes, unsupported future minima, and persisted future
++metadata have old-reader fixtures for source parse, root classification,
++accepted artifact load, API/dashboard projection, retry, fanout, convergence,
++and cleanup.
++
+ Every future requirement axis must add all of these in the same change:
+ 
+ - typed normalized state, not raw maps or raw TOML pass-through

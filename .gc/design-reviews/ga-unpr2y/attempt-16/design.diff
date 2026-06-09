@@ -1,0 +1,372 @@
+--- .gc/design-reviews/ga-unpr2y/attempt-16/design-before.md	2026-06-09 03:12:15.946101263 +0000
++++ internal/session/DESIGN.md	2026-06-09 21:19:50.645706946 +0000
+@@ -5,7 +5,7 @@
+ | Status | Draft backlog |
+ | Behavior source | `REQUIREMENTS.md` |
+ | Scope | Small refactors that move session decisions into `internal/session` |
+-| Latest design-review disposition | Attempt 15 global verdict `block`; this revision is an `iterate` response |
++| Latest design-review disposition | Attempt 16 global verdict `block`; this revision is an `iterate` response |
+ | First executable work | Slice 0 universal evidence preflight only; per-slice contracts land with the first slice that uses them |
+ | Archive | `DESIGN_REVIEW_NOTES.md` is historical and non-normative unless text is copied here |
+ 
+@@ -15,7 +15,8 @@
+ behavior-moving slice is approved. Slice 0 may only collect source-complete
+ evidence, validate artifact freshness, and repair or owner-retire stale
+ requirement evidence. Every later slice must add its own operation preflight
+-before it moves behavior.
++before it moves behavior, and that preflight must cite executable rows rather
++than broad future-facing sections in this document.
+ 
+ ## Goal
+ 
+@@ -50,6 +51,27 @@
+ drift as a requirements update unless the changed scenario rows, exact proof
+ selectors, and approval record land together.
+ 
++## Attempt 16 Review Response
++
++<!-- REVIEW: added per attempt-16-global-synthesis -->
++
++Attempt 16 still blocks behavior-moving decomposition. This revision keeps
++`design_review.verdict=iterate`: non-mutating Slice 0 evidence gathering may
++continue, but no mutation, routing, worker-boundary, event, runtime, or public
++wire behavior may move until the required rows, validators, and proof commands
++exist and pass.
++
++| Finding | Active design response |
++|---|---|
++| Slice 0 parity proof can pass without proving current behavior. | Make `SLICE0_CONTRACT.yaml` the close gate for Slice 0. It must enumerate every validator and proof command, fail on missing validators, skipped tests, build-tag exclusions, zero matched selectors, stale paths, absent negative fixtures, or any active `SESSION-*` row without current executed proof or owner-approved amendment/retirement. `SCENARIO_PARITY.yaml` must map each active row to exact slices, surfaces, routes, current oracle, characterization proof, and proof command. |
++| Atomic mutation semantics lack a real store and fence contract. | Add `STORE_CAPABILITY_MATRIX.yaml` before any mutating slice. Each operation row must choose exactly one fence strategy: store-native conditional write; durable value/token/revision precondition with immediate reread; or explicitly repair-converged blind write with eligibility limits, supersession keys, post-write verification, and failure-injection tests. Unknown store capability blocks mutation. |
++| Migration and worker-boundary sequencing are not source-complete. | Replace file-name triggers with inventory-driven rows from `SESSION_BOUNDARY_SYMBOLS.yaml`, `API_CLI_ROUTE_INVENTORY.yaml`, and `WORKER_BOUNDARY_EXCEPTIONS.yaml`. Every API/CLI mutating lifecycle path either routes through `worker.Handle` or has an exact expiring exception with route, symbol, key family, parity, rollback, and retirement proof. |
++| Read-only target classification can fork materializing resolver behavior. | Add a shared-resolver sequencing rule: read-only and materializing modes must share one precedence source until materialization migrates, or anti-drift tests must compare match vectors and result kinds for both modes. `repair-needed` must be endpoint-specific, with repair scheduler, retry or degraded-result behavior, current successful lookup preservation, persistence-error propagation, and repair fence. |
++| Target-classification output risks becoming a flat optional facade. | Treat the current field list as a provisional field census. The first adopter may only expose fields it consumes; non-first-adopter fields are forbidden in active Go structs, OpenAPI/generated-client types, event payloads, and cross-slice contracts until a checkpoint row promotes them. Production results must use tagged or per-kind structures, not a flat optional envelope. |
++| Event, recovery, and public-wire proof is not closed-world. | Inventory every current `session.*` event plus session request/result events. Each row must prove committed fact, emission owner, canonical identity fields, payload adequacy, public visibility, criticality, durable scan owner, idempotency key, duplicate/stale behavior, and proof selector. `events.NoPayload` is allowed only when the row proves envelope fields are sufficient. |
++| Runtime/reconciler boundaries, diagnostics, and budgets are not materialized. | `BOUNDARY_MATRIX.yaml`, `DIAGNOSTICS_MANIFEST.yaml`, operation-specific `RuntimeIntent` rows, pure-decider import/call guards, runtime-missing anti-flap rows, large-city performance evidence, and production `bdstore` subprocess accounting are mandatory before behavior-moving slices that consume them. |
++| Attempt artifact paths are inconsistent. | Unfixable in this document: persona synthesis source beads for attempt 16 still stamped paths under `attempt-1`. The workflow formula owns that path calculation. This design consumes `.gc/design-reviews/ga-unpr2y/attempt-16/synthesis.md` as the authoritative attempt 16 synthesis. |
++
+ ## Attempt 15 Review Response
+ 
+ <!-- REVIEW: added per attempt-15-global-synthesis -->
+@@ -152,16 +174,17 @@
+ | Artifact | Purpose |
+ |---|---|
+ | `SLICE0_BASELINE.md` | Checkout baseline, upstream/ancestry facts, proof transcript, and explicit reason if an upstream ref is unavailable. |
+-| `SLICE0_CONTRACT.yaml` | Machine-readable close contract for artifacts, schemas, validators, fixtures, proof commands, workflow finalizer metadata, and a meta-check that fails when any named validator is absent or skipped. |
++| `SLICE0_CONTRACT.yaml` | Machine-readable close contract for artifacts, schemas, validators, fixtures, proof commands, workflow finalizer metadata, and a meta-check that fails when any named validator is absent, skipped, build-tagged out, or matches zero tests. |
+ | `BOUNDARY_INVENTORY.md` | Human-readable source inventory for session lifecycle, identity, route, event, repair, and runtime fact boundaries. |
+ | `SESSION_BOUNDARY_SYMBOLS.yaml` | Machine-readable writer/read inventory with path, symbol, key family, dynamic-key source, receiver/helper chain, owner, exception, and retirement condition. |
+-| `SCENARIO_PARITY.yaml` | One row for every active `SESSION-*` scenario, touched surfaces, exact tests or static selectors, proof command, current oracle, amendment status, owner, and expiry for any accepted stale evidence. |
++| `SCENARIO_PARITY.yaml` | One row for every active `SESSION-*` scenario, exact slices, touched surfaces, routes, exact tests or static selectors, current oracle, characterization proof, proof command, amendment status, owner, and expiry for any accepted stale evidence. |
+ | `TARGET_CLASSIFICATION_CONTRACT.yaml` | Schema and first-adopter rows for typed result states, match vectors, bead/config state, diagnostics, resolver precedence, and no-side-effect proof. |
+ | `COMMAND_APPLIERS.yaml` | Schema for operation rows and universal inventory of current command-like writers. Operation-specific wake, close, drain, stop/interrupt, runtime-start, runtime-missing cleanup, identity-retirement, and repair/backfill rows are per-slice preflight unless the slice moves that operation. |
+-| `BOUNDARY_MATRIX.yaml` | Session/reconciler/runtime ownership matrix schema plus universal source inventory for wake, hold, wait, drain, runtime observation, pool demand, provider health, progress, repair, partial snapshots, and destructive actions. |
+-| `API_CLI_ROUTE_INVENTORY.yaml` | Huma routes, legacy mux routes, Cobra commands, `apiClient()` fallbacks, generated-client paths, dashboard/SSE projections, doctor, inspect, trace, mail, extmsg, transcript, attach, nudge, pool-resume, assignee, and generic bead routes that can reach sessions. |
+-| `WORKER_BOUNDARY_EXCEPTIONS.yaml` | Exact production exceptions to the worker boundary, including API manager construction and API session-resolution direct-create paths, with owner and expiry. |
+-| `DIAGNOSTICS_MANIFEST.yaml` | Operation/check IDs, reason/outcome codes, renderer surfaces, trace mappings, required facts, redaction, event relationships, query budgets, subprocess budgets, and hot-loop constraints. |
++| `STORE_CAPABILITY_MATRIX.yaml` | Current persistence surfaces, atomic update support, conditional write support, metadata merge behavior, close/reopen behavior, revision/token availability, read-after-write guarantees, blind-write risks, and proof selectors. |
++| `BOUNDARY_MATRIX.yaml` | Session/reconciler/runtime ownership matrix schema plus universal source inventory for wake, hold, sleep, wait, drain, runtime observation, pool demand, provider health, progress, repair, partial snapshots, runtime-missing cleanup, and destructive actions. |
++| `API_CLI_ROUTE_INVENTORY.yaml` | Huma routes, legacy mux routes, Cobra commands, `apiClient()` fallbacks, generated-client paths, dashboard/SSE projections, doctor, inspect, trace, mail, extmsg, transcript, attach, nudge, sleep, wait, drain, pool-resume, assignee, materializing resolver paths, and generic bead routes that can reach sessions. |
++| `WORKER_BOUNDARY_EXCEPTIONS.yaml` | Exact production exceptions to the worker boundary, including API manager construction, Huma close, API session-resolution direct-create paths, wake/drain/sleep/wait local fallbacks, repair/doctor/migration routes, and generic bridges, with owner, expiry, and retirement proof. |
++| `DIAGNOSTICS_MANIFEST.yaml` | Operation/check IDs, reason/outcome codes, renderer surfaces, trace mappings, required facts, redaction, event relationships, query budgets, subprocess budgets including `bdstore`, durable-scan budgets, and hot-loop constraints. |
+ | `VOCABULARY_CHECKPOINTS.yaml` | Shared type/field lifecycle, first caller, exact demanded fields, non-goals, rule-of-two status, and expansion rule. |
+ 
+ Every machine-readable artifact must declare `schema_version`, row `id`,
+@@ -178,6 +201,12 @@
+ execute or the owner-approved retirement/amendment record must name the product
+ decision.
+ 
++Slice 0 close is blocked unless every active `SESSION-*` row either resolves to
++a current compiled and executed selector or carries an owner-approved
++amendment/retirement row. Rows that cite build-tagged integration tests must
++name the build tag, proof command, and negative selector that proves the row did
++not silently fall out of the minimum proof.
++
+ Slice 0 validators must fail on missing artifacts, schema-invalid YAML, stale
+ paths, zero-match selectors, missing negative fixtures, broad exclusions,
+ unowned writers, missing renderer proof, unobservable event claims, absent
+@@ -189,7 +218,7 @@
+ Minimum proof command:
+ 
+ ```bash
+-go test ./cmd/gc ./internal/session ./internal/api ./internal/events -run 'TestSlice0Contract|TestSessionBoundaryGuard|TestSessionBoundaryInventoryFresh|TestSlice0Artifacts|TestScenarioParityFreshness|TestVocabularyCheckpoints|TestSessionDiagnosticsManifest|TestSessionCommandApplierLedger|TestSessionBoundaryMatrix|TestSessionRouteInventoryFresh|TestWorkerBoundaryExceptionLedger|TestEveryKnownEventTypeHasRegisteredPayload' -count=1
++go test ./cmd/gc ./internal/session ./internal/api ./internal/events -run 'TestSlice0Contract|TestSessionBoundaryGuard|TestSessionBoundaryInventoryFresh|TestSlice0Artifacts|TestScenarioParityFreshness|TestVocabularyCheckpoints|TestSessionDiagnosticsManifest|TestSessionCommandApplierLedger|TestSessionStoreCapabilityMatrix|TestSessionBoundaryMatrix|TestSessionRouteInventoryFresh|TestWorkerBoundaryExceptionLedger|TestEveryKnownEventTypeHasRegisteredPayload' -count=1
+ ```
+ 
+ ## Target Classification Contract
+@@ -207,6 +236,14 @@
+ assignee normalization, nudge, attach, pool resume, and sling remain
+ characterization-only until their own surface rows pass.
+ 
++Shared resolver sequencing rule: read-only and materializing resolver modes
++must share one source of precedence until the materializing paths migrate. If a
++slice cannot use one shared resolver implementation, it must add anti-drift
++tests that feed the same fixtures through read-only and materializing modes and
++compare ordered match vectors, result kinds, conflict groups, selected IDs, and
++error classes. A slice may not fork target precedence because one path is
++query-side and another path can create or repair sessions.
++
+ The classifier is side-effect free:
+ 
+ - no store writes
+@@ -250,7 +287,17 @@
+ adopter preserves successful selection after a separate repair or intentionally
+ changes the result with owner approval.
+ 
+-Typed result schema:
++Every `repair-needed` result must be endpoint-specific. The relevant
++`TARGET_CLASSIFICATION_CONTRACT.yaml` row must name the audited repair owner,
++whether the endpoint retries after repair, returns the current successful
++lookup with a diagnostic, or returns a typed degraded result, how current
++successful lookups are preserved unless owner-amended, how persistence errors
++surface to API/CLI callers, and which fence protects the repair write.
++
++Production result types are tagged by `result_kind` or split into per-kind
++structures. The field list below is a provisional census, not permission to add
++a flat optional envelope. The first adopter may only add fields consumed by the
++API query adapter and its parity tests.
+ 
+ | Field | Meaning |
+ |---|---|
+@@ -258,11 +305,16 @@
+ | `source_surface` | Surface asking for classification, starting with `api-query`. |
+ | `normalized_token` | Trimmed target token after surface-local normalization. |
+ | `match_vectors[]` | Ordered matches with `vector_kind` (`template-prefix`, `direct-id`, `configured-name`, `live-session-name`, `live-alias`, `path-alias`, `closed-session-name`, `closed-alias`), candidate ID, order, and conflict group. |
+-| `bead_state` | For concrete matches: bead ID, status, type, labels, lifecycle state, session name, alias, title, created time, and whether the bead is repairable empty-type. |
+-| `config_state` | For configured targets: named identity, mode, canonical bead ID, conflict bead ID, reserved-unmaterialized flag, config-orphan flag, and materialization allowed flag. |
+-| `diagnostics` | Stable reason code, retryability, source facts, stale or partial fact marker, and renderer surfaces that must preserve current wire output. |
++| `bead_state` | Provisional census for concrete matches: bead ID, status, type, labels, lifecycle state, session name, alias, title, created time, and whether the bead is repairable empty-type. First-adopter structs include only fields the read-only API query adapter consumes. |
++| `config_state` | Provisional census for configured targets: named identity, mode, canonical bead ID, conflict bead ID, reserved-unmaterialized flag, config-orphan flag, and materialization allowed flag. Materialization flags stay out of active public or shared types until a materializing slice consumes them. |
++| `diagnostics` | Stable reason code, retryability, source facts, stale or partial fact marker, and renderer surfaces that must preserve current wire output. Stale, partial, and later-surface diagnostics remain provisional until the adopting endpoint row promotes them. |
+ | `terminal_error` | Wrapped domain error class used only by adapters that must preserve `errors.Is` behavior and current Huma/legacy HTTP rendering. |
+ 
++Non-first-adopter fields are forbidden in active Go structs, OpenAPI generated
++client types, event payloads, and cross-slice contracts until
++`VOCABULARY_CHECKPOINTS.yaml` promotes them from `provisional` to
++`delegating` with exact consumers and proof selectors.
++
+ Typed selection result kinds:
+ 
+ - `selected`: exactly one candidate selected by a surface adapter
+@@ -300,6 +352,12 @@
+ that can alter session lifecycle, identity, wake, runtime-start, close, drain,
+ repair, or transcript metadata.
+ 
++`STORE_CAPABILITY_MATRIX.yaml` must be complete before this ledger authorizes a
++mutating slice. A ledger row that writes session-owned state must cite the store
++capability row it relies on, including whether the current persistence surface
++supports conditional writes, revision tokens, partial metadata merge, close or
++reopen primitives, and read-after-write verification.
++
+ Each ledger row must include:
+ 
+ - exact path and function
+@@ -319,9 +377,10 @@
+ The shrink-only guard must fail on new external `SetMetadata*`,
+ `MetadataPatch` application, patch-constructor use, raw top-level status/type
+ mutation, `session.Manager.Create*` bypasses, repair/doctor/migration bypasses,
+-or generic bead mutation bridges unless an exact expiring row exists. Tests and
+-fixtures may be exceptions only when their path is exact and their fixture role
+-is declared.
++exported patch-map APIs, lifecycle parallel-start writes, create rollback
++writes, or generic bead mutation bridges unless an exact expiring row exists.
++Tests and fixtures may be exceptions only when their path is exact and their
++fixture role is declared.
+ 
+ Session-owned families include lifecycle (`state`, wake, hold, drain, pending
+ create/start, quarantine, archive, close reason), identity (`session_name`,
+@@ -343,10 +402,12 @@
+ - API/CLI generic bead update routes that can target session beads
+ 
+ If old and new writers coexist for a key family, the design for that slice must
+-name the cross-process fence: store-native compare-and-swap, value-embedded
+-token checked immediately before commit, or an explicit repair-converged blind
+-write rule with crash/race tests. An exception that keeps two unfenced writers
+-for the same session-owned field is not allowed.
++name exactly one cross-process fence: store-native compare-and-swap or
++conditional update; value-, token-, or revision-precondition checked
++immediately before commit and verified by reread; or an explicit
++repair-converged blind write rule with eligibility limits, supersession keys,
++post-write verification, and crash/race tests. An exception that keeps two
++unfenced writers for the same session-owned field is not allowed.
+ 
+ Repair writes, including empty-type repair and runtime identity backfills, must
+ have an audited owner. A read path may return `repair-needed`, but it may not
+@@ -373,8 +434,10 @@
+ - store capability row for the current persistence surface: atomic update,
+   partial metadata update, conditional update, close/reopen semantics, and blind
+   write behavior
+-- write primitive, conditional fence, token, or explicit repair-converged blind
+-  write rule
++- exactly one write strategy: store-native conditional write; durable
++  value/token/revision precondition with immediate reread; or
++  repair-converged blind write with eligibility limits, supersession keys,
++  post-write verification, and repair owner
+ - post-write verifier and expected durable state
+ - runtime provider ordering
+ - post-commit event ordering
+@@ -390,6 +453,11 @@
+ prepare/commit/rollback, runtime-missing cleanup, repair/backfill,
+ provider-health reactions, and reconciler lifecycle transitions.
+ 
++Unknown store semantics are a hard gate. If `STORE_CAPABILITY_MATRIX.yaml`
++cannot prove the chosen fence on the current store, the slice must either keep
++the writer in its legacy location, add a store capability first, or narrow the
++operation to read-only characterization.
++
+ Each operation row must include failure-injection tests for stale snapshots,
+ raced lifecycle operations, partial metadata writes, duplicate commands,
+ provider success followed by commit failure, commit success followed by event
+@@ -427,6 +495,25 @@
+ Route-level parity tests must cover both local and API paths for every
+ session-affecting command that delegates to a new session-owned operation.
+ 
++The migration trigger is inventory-driven, not file-name driven. Before a
++production API or CLI session lifecycle route changes, the slice must cite rows
++from all three ledgers that apply:
++
++- `SESSION_BOUNDARY_SYMBOLS.yaml` for the exact symbol, helper chain, dynamic
++  key source, and key family.
++- `API_CLI_ROUTE_INVENTORY.yaml` for the Huma route, legacy mux route, Cobra
++  command, `apiClient()` fallback, generated-client/dashboard/SSE exposure, or
++  generic bead bridge that can reach the symbol.
++- `WORKER_BOUNDARY_EXCEPTIONS.yaml` for any temporary direct manager, store,
++  sessionlog, repair, doctor, migration, or lifecycle write that remains.
++
++Required current rows include `resolveSessionTargetIDWithContext` with
++`materialize:true`, Huma close construction of a session manager and
++`CloseDetailed`, all production raw close writers, wake, nudge, sleep, wait,
++drain and drain-ack paths, create rollback, lifecycle parallel start, generic
++bead update bridges, and exported patch-map helpers. Close alignment applies to
++all production close writers, not only one named route.
++
+ ## Migration Coexistence And Rollback
+ 
+ <!-- REVIEW: added per attempt-15-migration-coexistence -->
+@@ -444,11 +531,21 @@
+   or runs a repair/backfill command
+ - tests proving old readers tolerate new fields and new readers tolerate old
+   fields during rollback
++- source rows from `SESSION_BOUNDARY_SYMBOLS.yaml`,
++  `API_CLI_ROUTE_INVENTORY.yaml`, and `WORKER_BOUNDARY_EXCEPTIONS.yaml`
++- exact route, command, helper, or bridge that can still write the key family
++- OpenAPI/generated-client/dashboard proof when an API-visible route changes
+ 
+ No slice may leave both a legacy raw writer and a new session-owned command
+ writing the same field family unless the row names the fence and proves it with
+ raced writer tests.
+ 
++Each migrated key family must have before, during, and after ownership rows.
++The row must name the old writer, new command owner, allowed coexistence
++window, fence, validation parity, rollback behavior, and retirement condition.
++Dynamic key sources are key families too; a patch-map helper cannot be treated
++as harmless because the keys are chosen by a caller.
++
+ ## Reconciler, Runtime, And Session Split
+ 
+ <!-- REVIEW: added per attempt-15-reconciler-runtime-fact-ownership -->
+@@ -470,6 +567,12 @@
+ directory, and config hash. They must not include provider-specific scheduling,
+ health, progress, budget, or alert decisions.
+ 
++Each behavior-moving slice that passes runtime facts into `internal/session`
++must add an operation-specific `RuntimeIntent` row. The row must name required
++fields, forbidden provider-specific fields, source owner, freshness rule,
++partial/provider-error behavior, proof selector, and the adapter that converts
++provider observations into provider-neutral facts.
++
+ Destructive actions with unknown, stale, partial, or provider-error runtime
+ facts are rejected unless the current requirements and the operation contract
+ explicitly state a safe convergence rule and test it.
+@@ -485,6 +588,10 @@
+ - wake-cause production owner
+ - recovery or repair owner
+ - proof selector and negative fixture
++- pure-decider guard for files that feed session-owned decisions, including
++  forbidden imports, forbidden provider calls, and forbidden ambient clock reads
++- runtime-missing anti-flap rule, including cooldown, stale observation
++  behavior, destructive-action safety, and durable recovery owner where relevant
+ 
+ Required rows before behavior-moving slices include provider health, progress
+ and idle thresholds, runtime observations, wake-cause production, partial
+@@ -493,6 +600,11 @@
+ what exists on the current branch from behavior that exists only on another ref
+ or in historical notes.
+ 
++The pure-decider guard must fail if mutation-feeding deciders import store,
++runtime, config loaders, event bus, work/mail/extmsg packages, subprocess
++helpers, provider policy, or ambient time. Deciders receive immutable facts;
++adapters gather facts and execute side effects.
++
+ ## Event And Recovery Contract
+ 
+ <!-- REVIEW: added per attempt-15-event-recovery-contract -->
+@@ -508,6 +620,9 @@
+   configured identity, runtime session key, and generation/instance token when
+   relevant
+ - typed payload registration in `events.KnownEventTypes`
++- whether `events.NoPayload` is sufficient; envelope-only events require an
++  explicit proof row that all subscribers and public projections can act from
++  envelope fields alone
+ - SSE/OpenAPI/generated-client obligations when the event is public
+ - best-effort subscribers versus critical recovery actions
+ - durable scan owner for critical convergence
+@@ -518,14 +633,21 @@
+ identity retirement must converge from durable facts even when event emission or
+ subscriber execution is skipped.
+ 
+-Slice 0 must inventory current session events at least for
++Slice 0 must inventory every current `session.*` event and every session
++request/result event. At minimum the inventory includes
+ `session.woke`, `session.stopped`, `session.crashed`, `session.draining`,
+ `session.undrained`, `session.quarantined`, `session.idle_killed`,
+ `session.max_age_killed`, `session.suspended`, `session.updated`,
+ `session.drain_acked_with_assigned_work`, `session.stranded`, and
+-`session.work_query_failed`. Each row must say whether envelope fields are
+-sufficient, whether a typed payload is required, whether the event is critical
+-or best-effort, and whether public SSE/OpenAPI clients observe it.
++`session.work_query_failed`. Each row must record committed fact, emission
++owner, payload type, canonical identity fields, public visibility, criticality,
++durable scan owner, idempotency key, duplicate/stale behavior, and proof
++selector.
++
++Typed payloads are required when envelope fields cannot identify lifecycle
++generation, work-release identity, identity retirement, identity reuse, or the
++fact needed by a critical subscriber. `events.NoPayload` is valid only when the
++inventory row proves the envelope is the complete machine-readable contract.
+ 
+ Work-release convergence rows must include the release-identity snapshot,
+ scanner trigger, completion marker, duplicate/stale event behavior, partial
+@@ -563,6 +685,13 @@
+ facts, redaction, renderer tests, and negative tests proving machine-readable
+ data is not hidden only in message strings.
+ 
++The manifest must cover accepted, rejected, blocked, deferred, stale-fact,
++partial-fact, repair-needed, event-failed, event-skipped, event-duplicated,
++scan-recovered, and scan-failed outcomes before a slice can emit those results.
++Each row must name the API/CLI/trace/doctor renderer, public wire exposure if
++any, and the selector that proves the renderer stays in sync with the typed
++diagnostic.
++
+ Cost rules:
+ 
+ - Hot-path classification and reconciler fact materialization must use bounded
+@@ -572,6 +701,9 @@
+ - No subprocess loop is allowed in classification or reconciler hot loops.
+ - Subscriber fan-out, event emission, and durable scans need default caps or
+   benchmark-relative budgets.
++- Production `bdstore` subprocesses count against the owning hot-path budget.
++- Large-city proof must use a fixture size and row count declared in the
++  budget row; a tiny unit fixture cannot satisfy a hot-path budget.
+ 
+ Required budget rows before delegation:
+ 
+@@ -655,7 +787,8 @@
+ 
+ 0. Slice 0 universal evidence preflight: create the non-mutating inventories,
+    schemas, validators, negative fixtures, proof transcripts, stale-requirement
+-   repair/retirement rows, and workflow close gate.
++   repair/retirement rows, store-capability matrix, event inventory,
++   diagnostics manifest, budget rows, and workflow close gate.
+ 1. API query target classification: adopt read-only target classification for
+    API query-side lookup while preserving the exact
+    `resolveSessionTargetIDWithContext` precedence, Huma/legacy error rendering,

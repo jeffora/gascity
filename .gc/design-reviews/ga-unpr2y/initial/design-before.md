@@ -1,0 +1,294 @@
+# Session Boundary Design
+
+| Field | Value |
+|---|---|
+| Status | Draft backlog |
+| Behavior source | `REQUIREMENTS.md` |
+| Scope | Technical architecture and extraction plan for session ownership |
+
+This document tracks the technical design for moving session behavior toward a
+clearer ownership boundary. It is intentionally separate from
+`REQUIREMENTS.md`: product behavior stays in the requirements ledger, while this
+file holds design direction, backlog, and extraction sequencing.
+
+## Product Rule
+
+Technical refactors must preserve the behavior in `REQUIREMENTS.md` unless code
+inspection finds documented ambiguity, a real bug, or a product decision that
+needs owner input. If behavior changes, update `REQUIREMENTS.md` with the new
+scenario and proof.
+
+## Problem
+
+Session behavior is currently enforced across `internal/session`, `cmd/gc`,
+`internal/api`, `internal/worker`, and runtime-facing adapters. That creates
+poor encapsulation: callers can re-derive lifecycle, targeting, scaling,
+work-release, and runtime-observation rules from raw metadata.
+
+The target is not a broad session facade. The target is a small set of
+session-owned decisions and commands that can be adopted one cluster at a time.
+
+## Target Shape
+
+Use a functional-core, imperative-shell model:
+
+```text
+Fact reader -> Decider -> Session command/applier -> Session events/intents -> Subscribers/adapters
+```
+
+Roles:
+
+- Fact reader: gathers immutable session, config, runtime, and clock facts.
+- Decider: pure function that turns facts plus a requested operation into a
+  decision.
+- Session command/applier: validates current state, applies durable session
+  mutation, and returns or emits post-commit session-domain events.
+- Subscribers/adapters: react to session-domain events or runtime intents in
+  their own domain.
+
+The store is persistence, not a domain actor. It should not decide what session
+events mean.
+
+## Vocabulary
+
+- `SessionFacts`: immutable input for a decider.
+- `SessionDecision`: full result of a pure decision.
+- `SessionMutation`: durable session-state mutation to commit.
+- `RuntimeIntent`: requested runtime lifecycle action, if any.
+- `SessionEvent`: post-commit session-domain fact.
+- `SessionConflict`: rejected or blocked operation with a typed reason.
+
+## Mutation Boundary
+
+`internal/session` owns durable session lifecycle and identity mutation. In
+production code outside `internal/session`, do not write session lifecycle or
+identity metadata directly with bead-store calls.
+
+Session-owned mutation includes:
+
+- lifecycle state and reason fields: `state`, `sleep_reason`, `state_reason`,
+  `closing`, `closed_at`, `archived_at`
+- create/start fields: `pending_create_*`, `start_requested_at`,
+  `session_key`, generation, continuation epoch, reset metadata
+- wake/hold/drain fields: `wake_request`, `wake_mode`, `pin_awake`,
+  `held_until`, `quarantined_until`, drain acknowledgements and completion
+- identity fields: `session_name`, `alias`, `alias_history`, configured named
+  session metadata, continuity eligibility, retired identity markers
+
+Patch helpers may remain internal implementation building blocks and test
+fixtures. Production callers outside `internal/session` should call
+session-owned commands instead of receiving a patch map and applying it
+themselves.
+
+Exceptions:
+
+- tests and fixtures that construct explicit states
+- doctor/migration/repair code that normalizes historical broken state
+- low-level bead-store conformance utilities unrelated to production session
+  behavior
+
+## Event Boundary
+
+Cross-domain consequences are event-driven. Session events are session-domain
+facts, not commands to work, mail, extmsg, trace, or notification systems.
+Subscribers decide what those facts mean for their own domain.
+
+Examples:
+
+- Session may publish `SessionIdentityRetired`; work decides whether to release
+  assignments.
+- Session may publish `SessionClosed`; mail/extmsg decide whether bindings or
+  notifications change.
+- Session may publish `SessionWakeRequested`; the reconciler decides when to
+  evaluate runtime start.
+
+Runtime lifecycle is the partial exception: runtime is the execution substrate
+for session lifecycle, so a session decision may produce a `RuntimeIntent`.
+The worker/runtime adapter still owns provider-specific execution and error
+handling.
+
+The initial implementation can use post-commit in-process `SessionEvent`
+values. Event names and payloads should be designed so they can later become
+durable event-log facts if session state moves toward event sourcing.
+
+## Technical Requirements
+
+### TR-001: Preserve Product Semantics
+
+Technical refactors must preserve the current scenario ledger unless the change
+explicitly identifies a product ambiguity or bug.
+
+Acceptance criteria:
+
+- A touched product scenario keeps its expected behavior, evidence, and tests
+  aligned.
+- New technical APIs are covered by tests that prove parity with at least one
+  existing scenario row.
+- Any product behavior change adds or updates scenario rows with evidence and a
+  short rationale.
+
+### TR-002: Define Immutable Session Facts
+
+`internal/session` defines read-only fact types that deciders consume. Fact
+types describe already-gathered state; they do not perform store, runtime,
+config, or event I/O.
+
+Minimum fact families:
+
+- session bead snapshot and projected lifecycle view
+- target classification facts
+- named-session/config facts needed by the operation
+- runtime liveness/attachment/pending facts when already observed
+- clock value and policy durations needed by the decision
+
+Acceptance criteria:
+
+- Fact structs are copyable inputs to pure tests.
+- Fact readers can live in adapters while fact types live in `internal/session`.
+- Fact construction does not mutate session metadata.
+
+### TR-003: Add Pure Deciders One Operation At A Time
+
+Deciders are pure functions that take a requested operation plus immutable facts
+and return a typed decision.
+
+Acceptance criteria:
+
+- Decider tests are table-driven and do not require bead stores, runtimes, or
+  event recorders.
+- Each decider covers one cohesive operation or cluster before the next cluster
+  is extracted.
+- Decider output names session-domain events, not work/mail/extmsg commands.
+
+### TR-004: Move Durable Mutation Into Session-Owned Commands
+
+Production callers outside `internal/session` call session-owned command APIs.
+Those commands apply durable session mutations themselves; external callers do
+not apply session patch maps.
+
+Acceptance criteria:
+
+- Command APIs validate current session state before mutation.
+- Events are emitted or returned only after the session mutation commits.
+- Existing external `SetMetadata*`, `Update`, `Close`, or `Create` call sites
+  for session lifecycle/identity metadata shrink as commands are adopted.
+
+### TR-005: Keep Subscribers Domain-Specific
+
+Session events are session-domain facts. Subscribers decide what those facts
+mean for their own domain.
+
+Acceptance criteria:
+
+- Session does not choose work beads to reopen, mail recipients to rewrite, or
+  extmsg content to send.
+- Work, mail, extmsg, trace, and notification reactions are driven by typed
+  session events or current session facts.
+- Runtime execution remains adapter-owned; session may request runtime intents
+  but does not embed provider-specific execution policy.
+
+### TR-006: Start With Target Classification
+
+The first extraction slice is session target classification. It separates what
+an input token is from what an operation is allowed to do with it.
+
+Acceptance criteria:
+
+- Classification distinguishes direct session bead ID, live `session_name`,
+  live alias, configured named identity, ordinary config target,
+  `template:` factory target, path alias, not-found, and ambiguous/conflict
+  cases needed by current callers.
+- API, mail, bead assignee normalization, and extmsg callers stop re-deriving
+  these categories as the classifier is adopted.
+- Existing target-resolution and Phase 0 interface tests continue to pass.
+
+### TR-007: Keep The Event Log Path Open
+
+The initial implementation may use post-commit in-process `SessionEvent`
+values. Design event names and payloads so they can later become durable
+event-log facts if session state moves toward event sourcing.
+
+Acceptance criteria:
+
+- Event payloads describe facts that happened, not commands to attempt.
+- Event payloads carry stable identifiers and enough context for subscribers to
+  react idempotently.
+- No implementation assumes the current post-commit event mechanism is the
+  permanent persistence authority.
+
+## Backlog
+
+### 1. Target Classification
+
+Create a session-owned target classifier that current API, mail, bead assignee,
+and extmsg callers can adopt without changing behavior.
+
+Proof:
+
+- `internal/session/resolve_test.go`
+- `internal/session/named_config_test.go`
+- `internal/api/session_model_phase0_interface_spec_test.go`
+- `internal/api/session_resolution_path_alias_test.go`
+
+### 2. Wake Command Slice
+
+Extract explicit wake into a small decider plus session-owned command while
+preserving current wake metadata, wait cancellation, terminal conflict, and API
+response behavior.
+
+Proof:
+
+- `internal/session/waits_test.go`
+- `internal/session/lifecycle_transition_test.go`
+- `internal/api/session_model_phase0_lifecycle_spec_test.go`
+
+### 3. Close And Identity Retirement
+
+Move close/retire identity mutation behind a session-owned command and publish
+session-domain facts for subscribers.
+
+Proof:
+
+- `internal/session/manager_test.go`
+- `internal/api/session_model_phase0_lifecycle_spec_test.go`
+- `cmd/gc/session_beads_test.go`
+
+### 4. Wake/Hold/Drain Eligibility
+
+Extract wake/hold/drain eligibility from reconciler helper logic into a pure
+session decider.
+
+Proof:
+
+- `cmd/gc/session_reconcile_test.go`
+- `internal/session/lifecycle_projection_test.go`
+- `internal/session/waits_test.go`
+
+### 5. Pool Scaling And Cold-Start Demand
+
+Move pool desired-state and cold-start demand decisions behind session-owned
+facts/deciders while leaving work queries and store aggregation in adapters.
+
+Proof:
+
+- `cmd/gc/scale_from_zero_test.go`
+- `cmd/gc/build_desired_state_test.go`
+
+### 6. Provider Health And Progress Gates
+
+Feed provider/progress facts into session-owned health decisions, while the
+reconciler keeps scheduling, budgets, and trace output.
+
+Proof:
+
+- `cmd/gc/provider_health_gate_test.go`
+- `cmd/gc/session_progress_test.go`
+- `cmd/gc/session_reconciler_test.go`
+
+## Non-Goals
+
+- Do not rewrite the reconciler wholesale.
+- Do not introduce one broad session facade before a narrow contract is proven.
+- Do not move work, mail, extmsg, or provider-specific runtime policy into
+  `internal/session`.
+- Do not make event sourcing the first implementation step.

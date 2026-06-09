@@ -1,0 +1,424 @@
+diff --git a/.gc/design-reviews/ga-unpr2y/attempt-6/design-before.md b/internal/session/DESIGN.md
+index 48a6e40f3..6dbf02747 100644
+--- a/.gc/design-reviews/ga-unpr2y/attempt-6/design-before.md
++++ b/internal/session/DESIGN.md
+@@ -5,7 +5,7 @@
+ | Status | Draft backlog |
+ | Behavior source | `REQUIREMENTS.md` |
+ | Scope | Technical architecture and extraction plan for session ownership |
+-| Latest design-review disposition | Attempt 5 global verdict `block`; this revision is an `iterate` response |
++| Latest design-review disposition | Attempt 6 global verdict `block`; this revision is an `iterate` response |
+ 
+ This document tracks the technical design for moving session behavior toward a
+ clearer ownership boundary. It is intentionally separate from
+@@ -58,14 +58,60 @@ rollback instructions, and performance evidence in the same change.
+ | Scope and vocabulary controls are advisory. | Vocabulary checkpoints are required metadata for every new shared fact, result, event, or diagnostic field. | A type or field cannot leave a private slice until first caller, exact fields, rule-of-two evidence, non-goals, and future-slice bounds are recorded. |
+ | Performance and backpressure lack numeric proof. | Hot-path slices must add query-count, benchmark, or source-proof budgets with default caps where no historical benchmark exists. | A slice touching lookup, scans, runtime observation, event emission, subscriber fan-out, or reconciler loops fails review without numeric or baseline-relative evidence. |
+ 
+-Two items cannot be completed inside this design document alone: the
+-source-verified writer inventory and numeric performance baselines require
+-source artifacts and executable tests. This document therefore blocks
++## Attempt 6 Review Response
++
++<!-- REVIEW: added per attempt-6-global-synthesis -->
++
++Attempt 6 still blocks decomposition. This revision keeps
++`design_review.verdict=iterate` and adds a non-mutating Slice 0 preflight before
++any mutation-owning implementation slice. The preflight is mandatory because the
++review found that prose inventory rows, stale citations, and advisory
++vocabulary checks are not enough to constrain decomposition.
++
++| Finding | Design response | Exit gate |
++|---|---|---|
++| Writer inventory and mutation guards are not source-complete. | Slice 0 must generate or verify a source inventory from the checkout, install the additive static guard, and fail on unmapped writers before any writer conversion starts. | `internal/session/BOUNDARY_INVENTORY.md`, `cmd/gc/testdata/session_boundary_guard/allowlist.yaml`, guard fixtures, and `go test ./cmd/gc -run TestSessionBoundaryGuard -count=1` exist and pass with shrink-only allowlist rows. |
++| Behavior parity and citation freshness are not enforceable. | `internal/session/SCENARIO_PARITY.yaml` becomes the canonical bead-generation source for all `REQUIREMENTS.md` rows and slice owners. | `go test ./internal/session -run TestScenarioParityFreshness -count=1` fails on missing paths, stale assertions, commit-only current proof, or non-ancestor commit citations. |
++| Command atomicity and failure ordering are under-specified. | Every command cluster needs a command-applier row with snapshot preconditions, token or phase marker, allowed write primitive, stale-success behavior, partial-state matrix, repair authority, event order, and race tests. | Runtime-start and close cannot delegate callers until their applier rows prove provider-side-effect compensation and durable fencing. |
++| Target classification conflates facts, adapter policy, repair, and materialization. | The raw classifier is read-only candidate collection; adapter-owned policy creates the only authoritative `selected` result and writable adapters perform repair/materialization after revalidation. | Per-surface fixtures preserve resolver chain, recipient set, side effects, error shape, materialization, closed handling, alias history, and ambiguity before delegation. |
++| Reconciler/session ownership still leaks policy. | Session owns only lifecycle and identity eligibility over immutable facts; reconciler owns demand, scale, health, progress, restart budget, circuit, alert dedupe, trace policy, and idle-sleep decisions. | Pure-decider import guards and runtime-observation completeness tests fail destructive close, drain, rollback, release, cleanup, and restart branches on stale or partial facts. |
++| Event recovery, diagnostics, and performance gates are not executable. | Durable scans are the mandatory backstop for critical reactions; events and synchronous cascades are latency or diagnostic aids. Diagnostics and performance gates name concrete trace, doctor, API/CLI, query-count, and benchmark artifacts. | Event-miss and crash-after-commit tests prove scan convergence; hot-path slices include query-count or benchmark commands and subscriber backpressure budgets. |
++| Migration coexistence and rollback remain too loose. | Every implementation bead records converted callers, bake allowances, retired rows, guard-row changes, rollback files, proof commands, and one-writer proof. | A slice cannot close while any owned key has two production writers with different validation after its guard lands. |
++| Scope and vocabulary controls are advisory. | Vocabulary checkpoint metadata is enforced by a failing test and each shared type names first caller, demanded fields, rule-of-two status, non-goals, provisional bounds, and owning slice. | `go test ./internal/session -run TestVocabularyCheckpoints -count=1` blocks shared types or fields without checkpoint evidence. |
++| Current-attempt persona artifacts are stale. | This is workflow plumbing outside `internal/session/DESIGN.md`; the design records the defect but cannot repair the formula artifact writer. | The design-review workflow must either write persona syntheses under the current `$ATTEMPT_DIR` or materialize a source manifest; until then this design consumes only bead-stamped global synthesis paths. |
++
++The source-verified inventory, static guard, scenario parity source, vocabulary
++checkpoint file, performance baselines, and workflow artifact writer are not
++created by this design document. This document therefore continues to block
+ decomposition until those artifacts exist; it does not mark those concerns
+ resolved by prose.
+ 
+ ### Source-Verified Mutation Inventory Gate
+ 
++Slice 0 is a non-mutating preflight. It does not move a writer, change
++behavior, or introduce a new command API. It must land before any
++mutation-owning slice and must be safe to run repeatedly on the current
++checkout.
++
++Slice 0 artifacts:
++
++| Artifact | Purpose |
++|---|---|
++| `internal/session/BOUNDARY_INVENTORY.md` | Generated-or-verified inventory with one row per production writer, clearer, repair path, bridge, package mutator, manager method, exported patch builder, and raw bead mutation route that can affect session beads. |
++| `cmd/gc/testdata/session_boundary_guard/allowlist.yaml` | Shrink-only allowlist keyed by stable inventory ID, owner slice, exact path/symbol, key family, reason, expiry condition, and retirement test. |
++| `cmd/gc/testdata/session_boundary_guard/fixtures/` | Positive and negative fixtures for raw store writes, dynamic metadata batches, manager methods, package mutators, patch-map extension, generic bridge writes, top-level type/status mutation, repair helpers, and API/CLI manager construction. |
++| `cmd/gc/session_boundary_guard_test.go` | Additive static guard that scans production roots and fails on unmapped session-boundary mutations. |
++
++Slice 0 proof command:
++
++```bash
++go test ./cmd/gc -run 'TestSessionBoundaryGuard|TestSessionBoundaryInventoryFresh' -count=1
++```
++
++The guard may be introduced with legacy allowlist rows, but those rows are
++exceptions, not approval. Adding a row after Slice 0 requires a design or scoped
++`AGENTS.md` migration update; deleting or narrowing rows is always allowed.
++
+ The writer inventory below is a planning baseline, not an approval artifact.
+ Before any mutation-owning slice starts, the implementation bead must create or
+ update a source-verified inventory artifact checked by tests. The inventory row
+@@ -88,16 +134,20 @@ schema is:
+ The source scan must include at least these production paths before the row can
+ be marked source-complete:
+ `cmd/gc/session_reconcile.go`, `cmd/gc/session_reconciler.go`,
+-`cmd/gc/session_name_lookup.go`, `cmd/gc/session_circuit_breaker.go`,
++`cmd/gc/session_resolve.go`, `cmd/gc/session_name_lookup.go`,
++`cmd/gc/session_circuit_breaker.go`,
+ `cmd/gc/soft_reload.go`, `cmd/gc/cmd_wait.go`, `cmd/gc/cmd_stop.go`,
+-`cmd/gc/cmd_nudge.go`, `cmd/gc/adoption_barrier.go`,
++`cmd/gc/cmd_nudge.go`, `cmd/gc/cmd_prime.go`,
++`cmd/gc/adoption_barrier.go`,
+ `cmd/gc/cmd_bd_store_bridge.go`, `cmd/gc/session_lifecycle_parallel.go`,
+ `cmd/gc/session_beads.go`, `cmd/gc/cmd_session_wake.go`,
+ `cmd/gc/cmd_session.go`, `cmd/gc/cmd_handoff.go`,
+ `internal/api/session_resolution.go`,
++`internal/api/handler_sessions.go`, `internal/api/handler_beads.go`,
+ `internal/api/handler_session_create.go`, `internal/api/session_manager.go`,
+ `internal/api/huma_handlers_sessions_command.go`,
+-`internal/mail/beadmail/beadmail.go`, and `internal/extmsg`.
++`internal/session/chat.go`, `internal/mail/beadmail/beadmail.go`, and
++`internal/extmsg`.
+ 
+ Attempt 5 named additional symbol-level sources that the inventory cannot
+ collapse into broad package rows:
+@@ -121,6 +171,13 @@ exception or retirement row for each production hit. A package-level row may
+ stay in the overview table, but the implementation gate must split it into
+ call-site child rows before code moves.
+ 
++The scan must classify direct owned-key writes, dynamic metadata batches,
++patch-map aliases, raw `Create`/`Update`/`Close`, generic bridge writes,
++`RepairEmptyType`, runtime identity setters and clearers, manager methods,
++package-level session mutators, and exported patch builders. Unknown dynamic
++keys on a path that may carry a session bead are blocked until the inventory
++proves the target bead type or constrains the key set.
++
+ Static guards are required before writer conversion, not after cleanup. They
+ must fail on new unmapped production calls to raw bead-store writes, patch map
+ application, local metadata wrappers, manager/package-level session command
+@@ -131,6 +188,39 @@ row requires updating this design or the scoped `AGENTS.md` migration notes.
+ 
+ ### Full Scenario Parity Gate
+ 
++Scenario parity has one canonical source for decomposition:
++`internal/session/SCENARIO_PARITY.yaml`. The YAML mirrors every scenario row in
++`REQUIREMENTS.md`, assigns exactly one primary owner slice, lists secondary
++slices that must preserve the row, and names the current proof command or path.
++Task/bead generation must read this file instead of copying proof bullets from
++this design, the requirements ledger, or backlog notes by hand.
++
++The parity source row schema is:
++
++| Field | Meaning |
++|---|---|
++| `scenario_id` | Exact `REQUIREMENTS.md` row ID. |
++| `primary_slice` | Slice that owns behavior migration or `baseline` when no migration is planned. |
++| `secondary_slices` | Slices that must prove they did not regress the row. |
++| `current_oracle` | Runnable test, source path, issue, or owner-approved requirement amendment. |
++| `operation_surfaces` | API, CLI, package, mail, extmsg, worker, reconciler, transcript, doctor, or dashboard surfaces the row constrains. |
++| `compatibility_shape` | Required status codes, error body, request ID, async behavior, stdout/stderr, JSON shape, exit code, side effects, recipient set, and materialization behavior where applicable. |
++| `freshness_command` | Command or guard that proves the oracle still exists and covers the behavior. |
++
++Freshness proof:
++
++```bash
++go test ./internal/session -run TestScenarioParityFreshness -count=1
++```
++
++That test fails when a scenario row is missing from the parity source, a path no
++longer exists, a commit hash is used as current proof without a live test or
++source path, a cited commit is not an ancestor of `HEAD` but is treated as
++current evidence, or an oracle assertion no longer covers the required
++behavior. Commit-only proof may remain as historical context, but it cannot
++unblock extraction without a current checkout proof or owner-approved
++requirements amendment.
++
+ Each implementation bead must attach a parity artifact with one row per
+ `REQUIREMENTS.md` scenario it touches. The artifact must state the current
+ behavior oracle, exact preserved output, new proof, and whether the row is
+@@ -292,15 +382,26 @@ verify migration ownership:
+ - `session_design.converts=<inventory IDs or caller surfaces>`
+ - `session_design.allows_during_bake=<legacy inventory IDs>`
+ - `session_design.retires=<inventory IDs>`
++- `session_design.guard_rows_added=<inventory or allowlist IDs>`
++- `session_design.guard_rows_removed=<inventory or allowlist IDs>`
+ - `session_design.scenarios=<REQUIREMENTS IDs>`
+ - `session_design.guard=<static guard test path>`
+-- `session_design.rollback=<files and switch to revert>`
++- `session_design.proof_commands=<exact commands>`
++- `session_design.rollback=<files, switches, and caller routes to revert>`
++- `session_design.one_writer_proof=<owned keys and surviving production writer>`
++- `session_design.unresolved_risks=<accepted residual risks or none>`
+ 
+ No slice can be marked done while old and new writers mutate the same owned key
+ with different validation. Runtime start, close/retire, wake/hold/drain,
+ API materialization, and repair each ship as their own fenced cluster with a
+ single owner for the keys listed in that cluster.
+ 
++The one-writer proof is mechanical: for each owned key family touched by the
++slice, it lists every production writer before the slice, the converted route,
++legacy rows allowed during bake, the guard row that prevents new bypasses, and
++the exact condition that retires each legacy row. Worker-boundary compliance
++does not prove mutation-boundary compliance; both guards must pass.
++
+ ### Repair, Operability, And Budget Gate
+ 
+ Repair and normalization writes, including `RepairEmptyType`, are production
+@@ -348,6 +449,15 @@ shared:
+ - `session_design.vocab.fields=<exact fields introduced>`
+ - `session_design.vocab.rule_of_two=<second caller or private-until-needed>`
+ - `session_design.vocab.non_goals=<decisions and fields excluded>`
++- `session_design.vocab.owner_slice=<slice that may expand or retire it>`
++- `session_design.vocab.provisional_bounds=<future fields treated as closed upper bound>`
++
++Executable checkpoint source:
++
++| Artifact | Gate |
++|---|---|
++| `internal/session/VOCABULARY_CHECKPOINTS.yaml` | Records shared type or field, first delegated caller, exact demanded fields, rule-of-two status, non-goals, provisional bounds, and owner slice. |
++| `go test ./internal/session -run TestVocabularyCheckpoints -count=1` | Fails when a shared type/field named by the slice lacks a checkpoint, carries fields not demanded by its first caller, or expands beyond its provisional bounds without an adopting caller. |
+ 
+ Future-slice vocabulary is a maximum bound, not scaffolding to build now. A
+ reviewer must reject a shared type that has no first delegated caller, carries
+@@ -428,7 +538,8 @@ after two implemented deciders consume the same exact field set.
+ Initial slice vocabulary:
+ 
+ - Slice 1 introduces target-classification facts, target-classification results,
+-  candidate conflict details, and a per-operation policy input.
++  candidate conflict details, adapter-owned policy inputs, and adapter
++  selection results.
+ - Slice 2 may introduce explicit-wake facts, wake command results, and wake
+   conflicts.
+ - Later slices introduce lifecycle command facts, reconciler facts, and runtime
+@@ -439,7 +550,7 @@ Shared vocabulary checkpoints:
+ | Proposed vocabulary | First allowed caller | Required fields at introduction | Non-goals and expansion rule |
+ |---|---|---|---|
+ | `TargetCandidate` | Target classification adapter parity tests | kind, source surface, normalized token, session ID/name/alias/config identity, status, closed flag, conflict reason | Does not carry command mutation policy. Add fields only when a second surface needs the same field. |
+-| `TargetSelection` | API session target resolver adapter | selected candidate, ordered candidates considered, negative kind, retry/fallthrough directive | Not a universal session lookup facade. Each surface keeps its current resolver chain until parity tests approve delegation. |
++| `TargetSelection` | API session target resolver adapter | selected candidate, ordered candidates considered, negative kind, retry/fallthrough directive | The adapter-owned `selected` field is the only authority callers may act on. Diagnostic candidates are non-authoritative. Not a universal session lookup facade. Each surface keeps its current resolver chain until parity tests approve delegation. |
+ | `SessionCommandConflict` | Explicit wake command | operation, session ID, precondition, current projection, retryable flag, trace reason | Not a catch-all error envelope for API or CLI formatting. Adapters map it to existing typed output. |
+ | `RuntimeStartIntent` | Runtime-start prepare/commit slice | bead ID, template, provider, work dir, generation, instance token, session key, config hash | Does not own provider execution or scheduling. The reconciler/worker remains the imperative shell. |
+ | `SessionFactEvent` | First post-commit command subscriber | event type, bead ID, generation/instance token when relevant, idempotency key, committed facts | Not a durable outbox until an outbox is explicitly designed. Critical recovery still scans durable facts. |
+@@ -519,9 +630,12 @@ with the same ID, owner slice, and expiry.
+ | W-023 | `internal/session/waits.go` `WakeSession` wait close/update plus session wake batch | wake/hold/wait | Explicit wake and wait-hold commands | 2, 5 | Package-level mutator; allowed only behind command or internal caller row. |
+ | W-024 | `internal/session/named_config.go` and `internal/session/metadata_candidates.go` `RepairEmptyType` | repair empty session type, identity read-side normalization | Audited repair helper or typed repair-needed result | repair slice | Internal repair exception; callers must not hide repair in read-only classification. |
+ | W-025 | `internal/api/huma_handlers_sessions_command.go` direct repair, wake, suspend, close, and presentation updates | repair, wake, lifecycle, close, identity presentation | Typed API adapter over worker/session commands | 1, 2, 4, repair slice | Root API exception until retired; must preserve Huma typed-wire outputs. |
+-| W-026 | `cmd/gc/cmd_session.go`, `cmd/gc/cmd_handoff.go`, `cmd/gc/session_name_lookup.go`, `cmd/gc/adoption_barrier.go` target and lifecycle helpers | target lookup, wake/drain/identity evidence, handoff metadata | Worker/session command or read-only projection helper | per touched slice | Broad row only; implementation inventory must split by symbol and exact keys. |
++| W-026 | `cmd/gc/cmd_session.go`, `cmd/gc/cmd_handoff.go`, `cmd/gc/session_resolve.go`, `cmd/gc/session_name_lookup.go`, `cmd/gc/adoption_barrier.go` target and lifecycle helpers | target lookup, wake/drain/identity evidence, handoff metadata | Worker/session command or read-only projection helper | per touched slice | Broad row only; implementation inventory must split by symbol and exact keys. |
+ | W-027 | External calls to `Manager.CloseDetailed`, `Manager.Suspend`, and `Manager.UpdatePresentation` | close, lifecycle, identity presentation | Worker/session command factory or approved API adapter | 2, 4, repair slice | Guard fixture required for every non-test caller outside approved construction points. |
+ | W-028 | External calls to `session.WakeSession` and patch builders | wake/hold/drain, create/start, close, identity retirement | Session command APIs; patch builders stay internal implementation details | 2, 3, 4, 5 | Guard fixture required for package-level mutator calls and patch-map extension. |
++| W-029 | `internal/api/handler_sessions.go` legacy session handlers | target resolution, repair, lifecycle, close, presentation | Typed API adapter over worker/session commands and read-only classifier selection | 1, 2, 4, repair slice | Broad row only; implementation inventory must split by endpoint, symbol, status/error shape, and exact keys. |
++| W-030 | `internal/api/handler_beads.go` bead update/close/metadata routes that can target session beads | raw bead mutation, close, metadata batch, repair | Reject or route session-bead owned keys through session commands; prove non-session targets for generic paths | per touched slice | Unsafe by default when the target may be a session bead; guard fixture required for generic bridge writes. |
++| W-031 | Runtime identity setter and clearer helpers, including chat/session-key backfills and continuation reset paths | runtime identity, create/start lease | Runtime-start repair command or audited repair helper with token proof | 3, repair slice | Must split setter, clearer, hash, and continuation-reset writes by symbol before source-complete status. |
+ 
+ ### Static Guard
+ 
+@@ -625,11 +739,15 @@ Compatibility resolver chains:
+ | Attach/observe/log/transcript | existing target or allow-closed helper for that surface | Preserve provider-specific transcript fallback and closed lookup rules. |
+ | Assignee normalization and circuit-breaker resolution | bead ID/session-name/alias/configured identity resolver used by the current call site | Must preserve ambiguity and duplicate-key handling before centralization. |
+ 
+-Policy inputs are explicit and do not silently reorder a surface's compatibility
+-chain: `surface`, `allow_closed`, `materialize_named`, `allow_path_alias`,
+-`allow_historical_alias`, `read_only`, `allow_template_factory`,
+-`allow_ordinary_config_target`, and `reject_config_missing_named`. Policy can
+-accept, reject, materialize, or fall through; it cannot invent a candidate.
++Policy is adapter-owned post-filtering, not raw classifier behavior. The raw
++classifier receives target tokens and already-gathered session/config facts; it
++returns candidate facts in evidence order and never returns `selected`.
++Compatibility adapters apply explicit policy fields: `surface`, `allow_closed`,
++`materialize_named`, `allow_path_alias`, `allow_historical_alias`, `read_only`,
++`allow_template_factory`, `allow_ordinary_config_target`, and
++`reject_config_missing_named`. Policy can accept, reject, materialize, or fall
++through; it cannot invent or re-rank a candidate outside that surface's
++compatibility chain.
+ 
+ Repair and materialization are not classifier behavior. The raw classifier
+ collects candidate facts and may return `repair-needed` or
+@@ -640,11 +758,22 @@ target and records the audited command outcome. Mail query remains a recipient
+ set operation, not a single selected target, and historical aliases stay
+ read-only unless the surface-specific row above says otherwise.
+ 
+-Typed result contract:
++Raw classifier result contract:
++
++- ordered candidate facts and negative facts only
++- no `selected` field
++- no repair, materialization, close, update, or metadata write side effects
++- no surface-policy rejection except facts such as `template-factory`,
++  `ordinary-config-target`, `closed-session-name`, or
++  `requires-materialization`
+ 
+-- one selected candidate or one negative result
++Adapter selection result contract:
++
++- one `selected` candidate or one negative result; this field is the only
++  authority for caller action
+ - ordered candidates considered by the active compatibility chain
+-- optional all-candidates diagnostic snapshot for ambiguity output
++- optional all-candidates diagnostic snapshot for ambiguity output; diagnostic
++  candidates are not selection authority
+ - `negative_kind`: `not-found`, `ambiguous`, `forbidden-kind`,
+   `requires-materialization`, `configured-name-conflict`, `rejected-by-config`,
+   `closed-not-allowed`, or `ordinary-config-target`
+@@ -735,9 +864,37 @@ Attempt 5 closes two remaining loopholes:
+   stale-success, orphan-runtime, stop-compensation, and retry tests before the
+   runtime-start or close slice can delegate callers.
+ 
++Every command cluster must define a command-applier row before implementation:
++
++| Field | Required content |
++|---|---|
++| snapshot preconditions | Exact lifecycle, identity, runtime, config, work, and policy facts read before the command decides. |
++| validation point | The re-read, token comparison, revision check, or phase marker verified immediately before mutation. |
++| allowed write primitives | `Update`, `Close`, `SetMetadataBatch`, backend transaction, or command-specific helper, with store coverage proof. |
++| token/revision/phase marker | `instance_token`, generation, drain generation, close intent, or other durable fence that identifies the attempt. |
++| conflict reasons | Typed stale, terminal, missing-config, identity-conflict, provider-stop-failed, partial-query, budget, or runtime-mismatch outcomes. |
++| stale-success handling | How a write that used stale facts is detected and classified as committed, compensated, repaired, rejected, or unsafe. |
++| partial-state matrix | Every visible partial subset from multi-key writes and the repair or fail-closed behavior for that subset. |
++| provider side-effect order | Whether the durable intent is written before the provider action and how success/failure is compensated. |
++| repair authority | Which controller, command, or doctor path may repair and which facts it must prove first. |
++| post-commit fact and event order | Facts returned or emitted only after durable commit, plus idempotency and supersession keys. |
++| race tests | Required tests for close-vs-wake, close-vs-runtime-start, drain-vs-assigned-work, stale token, duplicate command, partial store failure, event miss, and crash after commit. |
++
++Runtime-start and close require durable fences around provider side effects:
++
++- Runtime-start writes a prepare token before provider start. If provider start
++  succeeds and commit fails, repair either commits the same token from observed
++  runtime identity or stops/orphan-handles that runtime by token. A newer token
++  prevents old provider identity from mutating the bead.
++- Close writes or proves a close intent before irreversible cleanup when the
++  provider action can outlive the process. If provider stop succeeds and durable
++  close fails, repair retries close without restarting the stopped runtime. If
++  provider stop fails, the bead remains open and no close/retire facts are
++  emitted.
++
+ | Command cluster | Precondition fields | Written keys | Ordering/atomicity assumption | Conflict reasons | Retryability and repair proof |
+ |---|---|---|---|---|---|
+-| Target classification | none; read-only snapshot plus policy | none | no mutation | ambiguous, not-found, forbidden-kind | Retry after config/store change. |
++| Target classification | none; read-only snapshot; adapter-owned policy applies after candidate collection | none | no mutation | ambiguous, not-found, forbidden-kind | Retry after config/store change. |
+ | Request explicit wake | bead status, projected lifecycle, held/quarantine, named identity, configured template presence, pending-create state | `wake_request`, blockers, optional dormant state normalization | re-read bead status/projection before one metadata batch | terminal, missing-config, identity-conflict, stale-state, pending-create-in-flight | Retriable when stale; tests race close, drain, and pending-create vs wake. |
+ | Prepare runtime start | state, generation, instance token, pending-create claim, current runtime liveness, config hash, budget/health gate result | `state=creating`, `generation`, `instance_token`, `pending_create_started_at`, reset keys, runtime-start hash markers | write prepare metadata before provider start; token identifies the attempt | stale-generation, stale-instance-token, already-running, provider-health-red, budget-exhausted, missing-config | Retriable if runtime absent and token/generation still match; repair rolls back stale creating. |
+ | Commit runtime start | generation, instance token, runtime identity, provider start result, pending-create marker | active/start-complete keys, `session_key`, hash fields, pending-create clear | re-read prepared bead; commit only when token matches or legacy no-token compatibility path applies | stale-generation, runtime-mismatch, pending-create-cleared, partial-start | Recovery can commit or roll back after observing runtime identity and token. |
+@@ -759,6 +916,32 @@ delivery. Until a durable session outbox exists, critical reactions must be
+ driven by durable session facts plus idempotent controller scans or retained
+ synchronous cascades.
+ 
++Durable scans are the mandatory backstop for every critical retryable reaction.
++Synchronous cascades may remain only as latency optimizations and must be safe
++to skip, duplicate, or crash after commit. Each reaction row must name the scan
++owner, cadence, store refs queried, completeness guard, idempotency key,
++supersession key, partial-query behavior, and event-miss/crash-after-commit
++tests.
++
++Internal post-commit facts use this minimum contract before any public payload
++change:
++
++| Field | Required content |
++|---|---|
++| fact type | Existing `events.*` constant or slice-local internal fact name. |
++| committed identity | Session bead ID plus current session name, alias, configured identity, generation, and `instance_token` when relevant. |
++| idempotency key | Stable key for duplicate subscriber scans, usually operation + bead ID + generation/token or drain generation. |
++| supersession key | Newer token/generation, terminal status, or successor canonical identity that makes an older fact non-authoritative. |
++| scan authority | Controller/reconciler/adapter path that can converge from durable facts when the event is missed. |
++| diagnostics | Trace/doctor outcome for converged, deferred, blocked, duplicate, stale, and failed scan results. |
++
++For close/work-release, the controller owns the durable scan on the same
++controller tick or the next reconciler scan. The scan queries closed session
++facts and open/in-progress work by bead ID, current and historical names where
++requirements allow, and configured identity. A partial work query defers
++release unless the synchronous close path already proved complete; a live
++successor or newer token suppresses old-identity release.
++
+ | Operation | Required order | Recovery authority | Subscriber class |
+ |---|---|---|---|
+ | Explicit wake request | validate -> commit wake metadata -> optional event/trace -> reconciler scan starts runtime | Durable wake metadata and controller scan | critical retryable |
+@@ -855,6 +1038,19 @@ structs.
+ | Progress signatures | transcript/progress observation | Unknown does not kill; stale over threshold may drain only with complete exemption facts | reconciler |
+ | Circuit breakers/restart counts/budgets | durable metadata plus in-memory budget state where current code requires it | Unknown budget state prevents additional destructive restart | reconciler |
+ 
++Runtime observation completeness is explicit. A destructive branch must record
++which observation state it consumed and why the branch is safe:
++
++| Observation state | Meaning | Destructive branch rule |
++|---|---|---|
++| complete-alive | Provider/runtime facts identify the current token or runtime key as alive. | Do not close, release, or clean up as dead; restart policy may nudge or observe only. |
++| complete-missing | Complete provider/runtime query proves the current token or runtime key is absent. | Close/release/cleanup may proceed only after work/config facts are also complete and command preconditions pass. |
++| stale-observation | Query succeeded but is older than the slice's freshness bound or predates the current token/generation. | Treat as unknown; no destructive close, drain, rollback, release, cleanup, or restart. |
++| unknown-provider | Provider lacks the fact, probe is inconclusive, or provider reports no process names. | Preserve existing fail-open or defer behavior for health, but fail closed for destructive branches. |
++| provider-error | Provider query failed or timed out. | Defer destructive action, emit trace/doctor evidence, and retry through controller scan. |
++| partial-query | Session, work, config, or runtime facts are incomplete. | Suppress destructive close/drain/rollback/release/cleanup/restart and return `durable-scan-deferred` or typed conflict. |
++| successor-observed | A newer token/generation or canonical identity exists. | Old token cannot mutate the bead; cleanup is best-effort by runtime identity and cannot release successor-owned work. |
++
+ State ownership:
+ 
+ | State | Immutable session fact? | Stateful controller fact? | Boundary |
+@@ -995,6 +1191,19 @@ Trace mapping rule:
+ - API-visible conflict fields must be represented by typed Huma outputs or
+   errors; do not smuggle structured data through raw JSON maps.
+ 
++Executable diagnostics gates:
++
++| Artifact or command | Required proof |
++|---|---|
++| `cmd/gc/session_reconciler_trace_types.go` plus renderer tests | New site/reason/outcome codes are centralized and rendered by `gc trace`. |
++| `go test ./cmd/gc -run 'TestSessionReconcilerTrace|TestSessionDoctor|TestSessionInspect' -count=1` | Trace, doctor, and inspect render accepted, rejected, blocked, deferred, repair, and scan outcomes for touched operations. |
++| `go test ./internal/api -run 'Test.*Session.*(Command|Lifecycle|Interface|Error)' -count=1` | API/Huma status, error body, request ID behavior, and typed response shape stay compatible for touched surfaces. |
++| `go test ./cmd/gc -run 'Test.*Session.*(CLI|JSON|Wake|Close|Drain|Resolve)' -count=1` | CLI stdout, stderr, JSON shape, and exit codes stay compatible for touched commands. |
++| `go test ./internal/events -run TestEveryKnownEventTypeHasRegisteredPayload -count=1` | Any new public event payload is registered and typed. |
++
++If a named test does not exist for a touched surface, the slice must add it
++before implementation or mark the surface out-of-scope in the parity source.
++
+ ## API, CLI, And Typed-Wire Gates
+ 
+ <!-- REVIEW: added per api-cli-typed-wire-obligations -->
+@@ -1062,6 +1271,21 @@ Slice-level budgets:
+ Every slice touching a hot path must include either a query-count test, a
+ benchmark, or an explicit source proof that the budget is preserved.
+ 
++Executable performance gates:
++
++| Gate | Command or fixture |
++|---|---|
++| lookup query count | `go test ./internal/session ./internal/api -run 'Test.*(QueryCount|TargetResolutionBudget)' -count=1` |
++| reconciler fact materialization | `go test ./cmd/gc -run 'Test.*(DesiredState|Reconciler).*QueryCount' -count=1` |
++| close/work-release scan | `go test ./cmd/gc -run 'Test.*(WorkRelease|AssignedWork).*QueryCount' -count=1` |
++| runtime-start repair scan | `go test ./cmd/gc ./internal/session -run 'Test.*RuntimeStart.*(Repair|Recovery)' -count=1` |
++| subscriber cap and backpressure | `go test ./cmd/gc ./internal/events -run 'Test.*(Subscriber|FanOut|Backpressure)' -count=1` |
++| large-city baseline | Slice-owned benchmark or fixture named in the bead, with before/after results and allowed delta. |
++
++If a gate command matches no tests, that is not a pass. The implementation bead
++must add the missing query-count, benchmark, or source-proof test before moving
++hot-path behavior.
++
+ ## Technical Requirements
+ 
+ ### TR-001: Preserve Product Semantics
+@@ -1187,8 +1411,8 @@ Before implementation:
+ 
+ - Complete the target collision inventory for API, CLI, mail, extmsg, nudge,
+   attach, inspect, materialization, and assignee normalization.
+-- Add the classifier result types and operation policy input only; do not add a
+-  broad session facade.
++- Add raw classifier result types plus adapter-owned policy and selection
++  result types only; do not add a broad session facade.
+ - Preserve each compatibility resolver chain in the target-classification
+   contract before replacing a call site.
+ 

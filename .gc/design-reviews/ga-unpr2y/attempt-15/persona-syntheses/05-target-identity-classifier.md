@@ -1,0 +1,38 @@
+# Amara Diallo
+
+**Persona verdict:** block
+
+**Sources:** Claude, Codex, DeepSeek V4 Flash
+
+**Consensus findings:**
+- [Blocker] The API query first-adopter precedence row does not match the current resolver chain. Claude and Codex both identify the real API path as: reject `template:<name>`, direct bead ID, configured named-session lookup and conflict handling, live `session_name`/`alias`, API path-alias by Title, then closed lookup where allowed. The design's shorter row omits configured named-session resolution and path-alias handling, which would regress existing `SESSION-ID-*` behavior and path-alias tests.
+- [Blocker] Configured named-session precedence and conflict semantics are not normative. All reviewers flag that configured named identities must be evaluated before generic live-name or alias matches, and configured-name conflicts must fail resolution rather than fall through to another live candidate. Without this rule, a usurper live session can receive traffic intended for a configured identity.
+- [Blocker] The candidate taxonomy is too flat to preserve overlap cases. Codex and DeepSeek highlight that a single bead can match both `session_name` and `alias`; Claude notes the current dual alias/session-name demotion rule. A single `kind` field cannot express concurrent match vectors, liveness, configured identity state, and surface-specific rejection without callers reinterpreting raw output.
+- [Blocker] Side-effect-free classification is correct but the repair behavior contract is incomplete. Current exact-ID and metadata lookup paths call `RepairEmptyType` for repairable session beads. Reviewers agree the raw classifier should not write, but the design must state whether repairable empty-type beads are selected with a `repair-needed` diagnostic, rejected, or handed to a separate repair owner while preserving current target-selection success.
+- [Major] API path-alias compatibility is underspecified. The current API path-alias branch matches pool-session `Title`, skips named-session beads, filters to active/awake/empty legacy state, rejects asleep/draining/creating/closed sessions, and resolves duplicate active titles by most recent `CreatedAt`. The design's generic path-alias mention does not capture the state filter or deterministic tiebreaker.
+- [Major] Deconfigured named-session rejection is omitted. Claude and DeepSeek both call out the API overlay that rejects named-session beads whose configured identity no longer exists in config. A centralized classifier or adapter contract must preserve this as a typed result or explicit adapter step.
+- [Major] Historical and closed matches are not safely bounded. Reviewers agree historical aliases and closed sessions can be useful facts for read/query surfaces, but must never be returned as bare writable live targets. Mutating adapters need an explicit global invariant rejecting historical aliases and closed sessions unless a surface intentionally supports that mode.
+- [Major] Mail behavior is too broad for this classifier adoption. Codex notes mail sender, recipient, inbox/query, count, and archive/query paths have separate semantics and should remain characterization-only until each has its own parity rows. The generic mail row is not enough to preserve sender fallback and configured mailbox behavior.
+
+**Disagreements:**
+- DeepSeek argues for a structural redesign around candidate `MatchVectors`; Claude and Codex phrase the requirement more narrowly as preserving dual-field match details and result states. My assessment: the design does not need to mandate a bitmask specifically, but it must represent multiple match vectors for one bead and keep token match facts separate from result state.
+- Codex asks to split `configured-name` into reserved-unmaterialized configured identity, materialized canonical named session, configured identity conflict, and rejected-by-config states. Claude allows the split to live partly in adapter-owned result kinds. Either location is acceptable only if the normative API precedence matrix and typed outcomes are explicit.
+- DeepSeek calls for a background repair process to replace read-path repair. Codex allows an owner-approved behavior amendment or separate audited repair command. The minimum approval bar is a documented repair plan that preserves current successful resolution for repairable session beads; the exact repair mechanism can be decided outside the raw classifier if the design pins ownership and tests.
+- Reviewers differ on whether path-alias should be represented as classifier output or adapter-private fallback. Either is acceptable only if the first-adopter scope states whether API path-alias is included, and if included, preserves Title matching, state filtering, and most-recent-created selection.
+
+**Missing evidence:**
+- A route-specific API query precedence matrix that exactly mirrors `resolveSessionTargetIDWithContext`, including configured named-session canonical resolution, configured conflicts, config-orphan rejection, path-alias by Title, and allow-closed fallback behavior.
+- A candidate/result schema that separates match vectors from bead state, configured identity state, result state, diagnostics, and selected target identity.
+- Explicit handling for repairable empty-type session beads, including whether read-path repair is retired, moved, or reported while target selection still succeeds.
+- A normative path-alias definition covering Title source, named-bead exclusion, accepted states, rejected states, `CreatedAt` availability, and most-recent-created tiebreaking.
+- A cross-surface table for at least configured named identities, template targets, ordinary config names, closed sessions, and historical aliases, with live mutation surfaces explicitly rejecting closed and historical targets.
+- Parity-test citations for the current behavior, including `internal/api/session_resolution_path_alias_test.go`, `internal/api/session_model_phase0_interface_spec_test.go`, and `internal/session/resolve_test.go`.
+- Separate mail parity rows for sender, recipient, inbox/query, count, and archive/query before any mail delegation to the classifier.
+
+**Required changes:**
+- Rewrite the API-query first-adopter row to match the real resolver order: reject `template:<name>`, direct bead ID, configured named-session canonical/conflict handling before live name or alias, config-orphan rejection overlay, live `session_name`/`alias`, API path-alias by Title with state filter and most-recent-created tiebreaker, then closed lookup where currently allowed.
+- Replace the flat candidate `kind` contract with a structure that can represent multiple match vectors for the same bead, bead liveness, configured identity state, repair-needed status, diagnostics, and terminal result kinds without callers inferring policy from raw candidates.
+- Move `not-found`, `ambiguous`, `store-error`, and `repair-needed` out of candidate kinds and into result kinds or diagnostics. Fold surface-policy forbiddenness into the selected result rather than treating it as an intrinsic candidate type.
+- Define repairable empty-type bead behavior. The classifier must be read-only, but the design must preserve current successful resolution and assign repair writes to an explicit audited owner or accepted behavior change with tests.
+- Add a global invariant that historical aliases and closed-session candidates are never selectable as live mutation targets, and require surfaces to opt in explicitly when read/query behavior allows them.
+- Keep mail delegation out of the first classifier adoption until sender, recipient, inbox/query, count, and archive/query behavior each have characterization and parity tests.

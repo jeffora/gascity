@@ -1,0 +1,313 @@
+--- .gc/design-reviews/ga-2404qu/attempt-17/design-before.md	2026-06-09 06:07:53.197102148 +0000
++++ .gc/design-review-inputs/core-gastown-pack-migration/design.md	2026-06-09 08:42:45.083162020 +0000
+@@ -7,7 +7,7 @@
+ requirements_file: /data/projects/gascity-fresh-main-20260604-VLKm8c/plans/core-gastown-pack-migration/requirements.md
+ status: draft
+ created_at: 2026-06-04T15:07:35Z
+-updated_at: 2026-06-09T02:00:53Z
++updated_at: 2026-06-09T08:40:42Z
+ ---
+ 
+ # Design: Core and Gastown Pack Split
+@@ -2396,6 +2396,301 @@
+ blocker and major finding above is converted into an implementation contract,
+ artifact, table, or gate rather than accepted as residual risk.
+ 
++### Attempt 17 Review Resolution Contracts
++<!-- REVIEW: added per attempt17-global-synthesis -->
++
++Attempt 17 keeps the review verdict at `iterate`. These contracts supersede
++weaker earlier language that allowed prose-only gates, path/count witnesses,
++loader allowlists without generated ownership, dog/Core ambiguity, or deferred
++docs/runtime decisions. No blocker or major finding is accepted as residual
++risk.
++
++#### Default-Deny Production Loader Inventory
++<!-- REVIEW: added per attempt17-required-core-loading -->
++
++`plans/core-gastown-pack-migration/loader-inventory.generated.yaml` is the
++binding source for all production config reads. The generator scans non-test
++Go under `cmd/gc` and production `internal/` packages, follows aliases and
++wrappers, and emits a row for every call that can reach `config.Load`,
++`config.LoadCity`, `config.LoadWithIncludes`, `LoadWithIncludesOptions`,
++no-refresh variants, raw TOML pre-reads, provider peeking helpers, completion
++and stop helpers, controller/API reload helpers, command diagnostics, packman,
++cache/lock validation, and any exported helper that returns a `*config.City` or
++equivalent resolved config.
++
++Each row contains file, function, symbol reached, loader class, fields read,
++normal-runtime reachability, required-system-pack participation expectation,
++allowed partial-read reason, owner, expiry, and focused test. The default is
++deny: a production loader row is illegal unless it routes through
++`internal/systempacks.LoadRuntimeCity`,
++`internal/systempacks.LoadRuntimeCityNoRefresh`, or one of the generated
++partial-read helpers named in the row.
++
++`RequiredSystemPackParticipation` is resolver-produced, not inferred from paths.
++It is matched to the validated file-set digest for Core, `bd`, and `dolt`, and
++records the provider-pack selection algorithm used for that city. Provider-pack
++selection is deterministic: Core is always required; `bd` and `dolt` are added
++only from the city's configured beads/provider requirements through
++`internal/systempacks.RequiredPackPlan`; public Gastown, retired Maintenance,
++stale materialized directories, and synthetic aliases never influence the host
++provider-pack set.
++
++Failure behavior is loader-class specific:
++
++| Loader class | Broken required pack result | May repair? | May read behavior? |
++| --- | --- | --- | --- |
++| runtime | fatal diagnostic before config behavior is read | yes, through system-pack repair before resolution | no until typed participation is valid |
++| no-refresh runtime | fatal diagnostic if existing materialization is missing, stale, partial, corrupt, shadowed, or absent from participation | no refresh; may only report | no |
++| partial edit | scoped raw TOML parse only | no | no agents, formulas, orders, prompts, hooks, or overlays |
++| partial doctor report | scoped raw TOML plus retired-source classification only | no | no |
++| doctor `--fix` | staged repair through mutation coordinator | yes, only under coordinator | only final validation after staged repair |
++| test fixture | lower-level config tests only | test-owned | test contract names the bypass |
++
++The broken-state matrix includes missing, corrupt, partial, stale,
++unexpected-effective-file, materialized-but-unresolved, shadowed, same-name
++collision, read-only city, repairable generated file drift, no-refresh stale
++content, stale synthetic cache, and unsupported transitive retired import.
++Plain diagnostics use read-only or no-refresh APIs. Mutation is limited to
++explicit fix paths under the mutation coordinator.
++
++#### Public Gastown, Core Dog, And Retired Maintenance Boundary
++<!-- REVIEW: added per attempt17-public-gastown-core-boundary -->
++
++Chosen model: public Gastown is a public pack that depends on host Core by
++contract, not by import. Public Gastown never imports Core or Maintenance. It
++may patch the host Core maintenance worker only through normal config layering
++after required host packs participate in resolution.
++
++Ownership is fixed:
++
++| Surface | Final owner | Binding rule |
++| --- | --- | --- |
++| Core maintenance-worker base agent, compatibility name `dog` | Core | Default pack configuration only; Go must work if renamed or omitted. |
++| Generic maintenance prompt body and Core prompt fragments | Core | Role-neutral text only; no Gastown requester/detector examples. |
++| Gastown-specific dog prompt wording, workdir/theme patch, requester/detector behavior, and notifications | public Gastown | Patch host Core fields or own Gastown prompts; every patch has a behavior-manifest row. |
++| Duplicate prompt fragments across Core and public Gastown | no implicit sharing | Names are pack-scoped; duplicate active global names are fatal unless a manifest row declares an alias. |
++| `../maintenance`, `.gc/system/packs/maintenance`, transitive Maintenance imports | retired | Pre-resolution doctor may diagnose generated cases; production resolution rejects or ignores as classified stale state. |
++| provider maintenance behavior | provider pack or Core | Provider-specific bytes stay provider-owned; active Core-worker bindings use config values. |
++
++Rendered prompt tests compile Core-only, public-Gastown-with-host-Core, renamed
++maintenance-worker, omitted-maintenance-worker, stale-Maintenance-import, and
++duplicate-fragment fixtures. A public Gastown asset ledger is generated from
++the exact pinned checkout and records active assets, patch targets, rendered
++prompt digests, formula/order/script paths, and test ids. Source deletion waits
++until each old Gas City asset maps to Core, public Gastown, provider pack,
++compatibility, docs-only, or retired with approved evidence.
++
++#### Ownership-Aware Role-Neutrality Scanner
++<!-- REVIEW: added per attempt17-role-neutrality -->
++
++Role neutrality is enforced by `role-surface.generated.yaml` plus a scanner
++that understands identifiers and ownership. Matching splits snake_case,
++kebab-case, dot paths, camelCase, PascalCase, TOML keys, metadata keys,
++function names, generated OpenAPI/dashboard strings, comments, templates,
++scripts, and prompt prose. It rejects sub-identifier surfaces such as
++`DogTheme`, role icon maps, theme functions, warmup defaults, prompt fallbacks,
++`crew` API/dashboard vocabulary, `gastown` template wiring, public-pack
++constants used by Core, and dispatch formula-name heuristics unless a row
++allows them.
++
++Each row contains file/asset, span, matched token, ownership class, final
++disposition, replacement mechanism, slice id, proof test, owner, and expiry.
++Core-owned rows fail on hardcoded Gastown roles. Public Gastown rows preserve
++Gastown behavior as inventory and fail only when they import retired
++Maintenance, require host internals, or leak into Core. Provider-pack rows are
++byte-preservation by default and require exception-ledger proof for active
++rewrites.
++
++The Go migration table must include at least these dispositions:
++
++| Surface | Required disposition |
++| --- | --- |
++| theme/icon helpers and `DogTheme`-style APIs | replace Go role defaults with config-driven display metadata or public Gastown assets |
++| API/OpenAPI/dashboard `crew` vocabulary | replace with neutral session grouping or config-supplied labels; regenerate schema/types in the same slice |
++| warmup mail/default city scaffolding | Core role-neutral defaults; Gastown defaults live in public Gastown templates |
++| prompt fallback/help text | Core neutral fallback; Gastown examples in public docs/assets |
++| sling/formula heuristics | formula selection from config/metadata, not role-name strings |
++| provider `dog`, `mayor`, or `deacon` bindings | resolve configured Core maintenance worker or configured recipients |
++| removed role-name guards | replace with generated scanner rows and tests, not ad hoc Go conditionals |
++
++If a Go role surface is intentionally deferred, the design claim for that slice
++must narrow to exclude it and the row must name the follow-up bead. Otherwise
++the slice is blocked.
++
++#### Pin, Cache, Activation, And Rollback Ledger
++<!-- REVIEW: added per attempt17-rollout-cache-rollback -->
++
++`public-gastown-pins.yaml` remains three-row and now has mandatory old/new
++binary evidence for each row: `current_baseline`, `compatibility`, and
++`activation`. Each row records immutable commit, durable public ref, subpath,
++pack digest, active-asset digest, behavior-manifest digest, role-surface
++digest, ordinary remote-cache key, registry/direct-source equality transcript,
++old-binary result, new-binary result, duplicate-active result, offline/cache
++result, rollback class, release-note requirement, and validator version.
++
++Activation pin switch and Maintenance removal are one candidate gate unless
++the ledger proves current-loader coexistence. The activation candidate must run
++normal production loading with Maintenance absent, old-binary plus activation
++pin or a named one-way boundary, stale synthetic-cache rejection, ordinary
++remote-cache hit, offline no-cache failure, downgrade after doctor fix, and
++zero-duplicate/no-gap checks.
++
++Legacy synthetic cache handling is ordered before ordinary git validation:
++retired synthetic public Gastown and Maintenance entries are detected,
++classified, and ignored. Promotion into an ordinary remote-cache key is allowed
++only through an explicit digest-validated helper that records source, commit,
++subpath, old synthetic key, new ordinary key, and transcript. Downgrade and
++rollback artifacts are generated beside the pin ledger and name which manifests
++old binaries can read, which state remains legacy-readable, and which manual
++steps are required for a one-way activation.
++
++#### Doctor Mutation And Runtime-State Safety
++<!-- REVIEW: added per attempt17-doctor-runtime-safety -->
++
++Plain `gc doctor` is report-only. It may run pre-resolution TOML import parsing,
++retired-source classification, lock/cache inspection, required-pack integrity
++checks, and runtime-state conflict detection, but it must not materialize,
++repair, promote cache entries, write locks, quarantine/prune files, migrate
++runtime state, or rewrite TOML.
++
++All mutation belongs to `gc doctor --fix` through a mutation coordinator. The
++coordinator owns one operation plan with a generation id, advisory city lock,
++post-lock digest refresh, staged Core/provider/public-pack content, scoped
++TOML/CST edits, staged runtime-state copies, compare-before-rename writes,
++final validation, and a publish record. A failed preflight leaves every live
++file byte-identical. A failed publish records the exact generation and file
++state so a later `--fix` can resume or report manual recovery without guessing.
++
++Runtime-state migration has a binding table:
++
++| State | Legacy read path | Core write path | Doctor/fix behavior | Rollback behavior |
++| --- | --- | --- | --- | --- |
++| JSONL export state and `.bak` | `.gc/runtime/packs/maintenance/jsonl-export-state.json*` | `.gc/runtime/packs/core/jsonl-export-state.json*` | copy only when Core destination absent; conflict is manual before marker | legacy retained for old binaries |
++| JSONL archive repo | `.gc/runtime/packs/maintenance/jsonl-archive/` | `.gc/runtime/packs/core/jsonl-archive/` | copy repo/refs/remotes only when destination absent | legacy retained; no merge after marker |
++| push-failure counters and export cursors | keys inside JSONL state | same keys in Core state | preserve values exactly | legacy values remain readable |
++| spawn-storm ledger | `.gc/runtime/packs/maintenance/spawn-storm-counts.json` | `.gc/runtime/packs/core/spawn-storm-counts.json` | copy when destination absent; Core wins after marker | legacy ignored but retained |
++| order skips and aliases | bead/order metadata | existing names or alias rows | preserve names or add alias migration test | old names remain diagnosable |
++| provider health JSON consumers | provider/Core state paths | provider/Core owner row | owner-specific witness required | no path rewrite without exception row |
++
++Doctor concurrency uses live process/runtime discovery, not PID, lock, or status
++files as authority. Healthy `--fix` is a zero-write golden. Generated-vs-custom
++pack detection uses digest, generation marker, source path, lock metadata, and
++operator edit classification; custom forks are manual diagnostics.
++
++#### Generated Artifact Contracts And Independent Completeness
++<!-- REVIEW: added per attempt17-generated-artifacts -->
++
++The following artifacts are generated, checked in, and freshness-tested before
++implementation beads may move or delete behavior:
++
++| Artifact | Owner | Required command/test | Required schema content |
++| --- | --- | --- | --- |
++| `behavior-manifest.generated.yaml` | Gas City plus public Gastown | generator command, old-tree transcript, `test/packcompat` | row id, old/final owner/path/digest, helper deps, trigger, observable output, semantic delta, old/final witnesses, public commit |
++| `role-surface.generated.yaml` | Gas City | scanner test | token span, ownership class, disposition, replacement, allowlist expiry, proof test |
++| `loader-inventory.generated.yaml` | Gas City | loader scanner test | call site, reached symbol, loader class, wrapper/allowlist, fatality boundary, proof test |
++| `slice-gates.generated.yaml` | Gas City | gate validator | slice id, exact commands, packages, `-run` filters, artifacts, forbidden states, public pin phase |
++| `public-gastown-pins.yaml` | Gas City plus public Gastown | pin validator | three phase rows, old/new binary transcripts, cache/offline/rollback evidence |
++| `system-pack-wording.generated.yaml` | Gas City plus public Gastown | docs/wording linter | term, allowed contexts, forbidden contexts, replacement phrase, consumers, goldens |
++| `test-migration.generated.yaml` | Gas City plus public Gastown | test-map validator | old test/subtest, replacement test/subtest, removal approval, behavior row id |
++| `provider-exceptions.generated.yaml` | Gas City | provider continuity tests | provider asset, default byte policy, allowed rewrite, old/new witness, expiry |
++
++Completeness is independently checked from VCS history and transcripts. The
++behavior generator cannot self-certify solely from the current tree: it must
++compare old-tree file moves/deletions/additions, old execution transcripts,
++current generated rows, public pinned-checkout rows, and test-migration rows.
++Any source move, deletion, added replacement asset, removed test assertion, or
++changed operator output without a row fails CI. Implementation beads cite row
++ids from these artifacts; prose sections are advisory when they conflict with a
++generated row.
++
++#### Bootstrap Embed Removal And Hidden Dependency Guard
++<!-- REVIEW: added per attempt17-bootstrap-hidden-dependencies -->
++
++Bootstrap cleanup is source-symbol guarded, not path-string-only. The hidden
++dependency guard scans imports, symbols, tests, docs, generated references, and
++fixtures for `bootstrap.BootstrapPacks`, `bootstrap.PackNames`,
++`bootstrapSkillDirs()`, `GC_BOOTSTRAP`, old bootstrap Core imports, skill
++materialization, cache helpers, provider registry functions, hook overlays, and
++prompt tests.
++
++The Core extraction slice deletes the production `//go:embed packs/**`
++directive and replaces `bootstrapAssets` with a private non-nil empty
++filesystem that returns `fs.ErrNotExist`. Production bootstrap assets must be
++empty and never read. Tests that need bootstrap fixtures inject inline
++`fstest.MapFS`; command/runtime tests use `internal/systempacks`; config
++package tests that need no-Core behavior use lower-level config helpers only.
++
++`GC_BOOTSTRAP=skip` is deleted from production semantics unless it can be
++proved to skip only empty bootstrap fixture materialization. It cannot skip
++Core materialization, provider host packs, retired-source classification,
++cache/lock validation, collision checks, or typed participation. Core skill
++resolution moves to Core/systempack sources and has a materialization test that
++fails if any production path reads `internal/bootstrap/packs/core`.
++
++#### Operator Docs, Terminology, And Release Evidence
++<!-- REVIEW: added per attempt17-operator-docs -->
++
++Docs are bound to runtime-state and terminology decisions before release. The
++canonical system-pack reference is `docs/reference/system-packs.md`, registered
++in docs navigation. Public Gastown owns a companion reference that uses the
++same wording matrix.
++
++The wording linter covers Markdown, MDX, JSON, TXT, TOML, Go strings,
++TypeScript, generated schema/reference outputs, CLI/help, doctor text and JSON,
++`FixHint` strings, tutorials, troubleshooting, examples, scripts, pack comments,
++public Gastown docs, and docs navigation. It distinguishes retired standalone
++Maintenance, lower-case maintenance, store/Dolt maintenance, Core maintenance
++worker, compatibility name `dog`, dog pool examples, public Gastown, host Core,
++legacy `.gc/system/packs/maintenance`, legacy `.gc/runtime/packs/maintenance`,
++and Dolt maintenance settings. Same-slice docs/schema/help updates are release
++gates for the behavior they describe.
++
++Operator transcript coverage is required for fresh init, upgraded local
++Gastown imports, retired Maintenance imports, stale system-pack directories,
++runtime-state migration, `gc doctor` report-only output, `gc doctor --fix`
++success, `--fix` refusal on custom forks, version skew, offline no-cache, stale
++synthetic cache, and rollback or one-way activation recovery.
++
++#### Witness Rows For Behavior And Provider Continuity
++<!-- REVIEW: added per attempt17-behavior-provider-witnesses -->
++
++Behavior preservation requires exact row witnesses before destructive changes.
++The first generator pass must include rows for branch pruning, Polecat formulas,
++shutdown-dance detectors/requesters, review workflows, commands, doctor checks,
++overlays, prompts, role agents, provider pack scripts, warrants,
++notifications, and public Gastown authorship. Initial public Gastown path rows
++must name final paths such as `gastown/orders/prune-branches.toml`,
++`gastown/scripts/prune-branches.sh`,
++`gastown/formulas/mol-polecat-base.toml`,
++`gastown/formulas/mol-polecat-commit.toml`,
++`gastown/formulas/mol-polecat-report.toml`, and any prompt or fragment path
++that preserves removed Core/Maintenance text. If a final public path is not
++known, the row is `blocked:path-unresolved` and the source cannot be moved.
++
++Provider continuity has exception rows for more than byte identity:
++
++| Surface | Required witness |
++| --- | --- |
++| `dolt-target.sh` and cross-pack sourced scripts | old/new script execution, pack-relative path, env, and author/provenance output |
++| configured recipients and empty recipient handling | old/new mail or nudge route tests with configured and empty values |
++| `pool = "dog"` or hardcoded worker targets | configured Core maintenance-worker resolution and renamed-worker fixture |
++| `DOG_DONE` nudges | old route witness and final binding-resolved route witness |
++| author/committer identities | old/new Git/Dolt author transcript or approved semantic delta |
++| health JSON consumers | old/new consumer path, schema, and provider/Core owner witness |
++| provider host-pack selection | `bd`, `dolt`, and exec provider matrices through `RequiredPackPlan` |
++| Core repair isolation | untouched provider file digest proof after Core repair and offline self-heal |
++
++Byte identity remains the default for provider assets. Any active provider
++rewrite needs a manifest row, provider exception row, old/new witness, semantic
++delta, and expiry or compatibility rationale.
++
++#### Attempt 17 Unfixable Items
++<!-- REVIEW: added per attempt17-unfixable-items -->
++
++None. The remaining state is `iterate` because the global verdict is `block`
++and the next review must verify these new contracts against the rest of the
++design.
++
+ ## Current System
+ 
+ `internal/builtinpacks/registry.go` defines the embedded pack set:

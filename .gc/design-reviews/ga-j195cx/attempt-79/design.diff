@@ -1,0 +1,402 @@
+--- design-before
++++ design-after
+@@ -277,8 +277,8 @@
+ | Step `on_complete` | `[[steps]]`, `children`, `loop.body`, expansion `template` | on-complete formula/action is present |
+ | Workflow-control metadata key | step metadata, child metadata, loop body metadata, expansion template metadata | key is present in the generated workflow-control metadata registry |
+ | Workflow-control metadata value | same metadata locations | `gc.kind` or another registry-declared control value is present byte-exactly as registered |
+-| Step `expand` | root steps, children, loop bodies, inline expansion templates | expansion field is present and materializes a subgraph contribution |
+-| `expand_vars` | same locations as step `expand`, plus compose expansion/map vars | compile-time expansion vars are present and affect graph materialization |
++| Authored step `expand` | root steps, children, loop bodies, inline expansion templates | decoded `Step.Expand` field is present and materializes a subgraph contribution |
++| `expand_vars` | same locations as authored step `expand`, plus compose expansion/map vars | decoded expansion-var field is present and affects graph materialization |
+ | Expansion/aspect contribution | `compose.expand`, `compose.map`, `compose.aspects`, transitive imports | contributed formula or template contains any construct in this registry |
+ 
+ <!-- REVIEW: added per DR41-validation-registry -->
+@@ -428,6 +428,30 @@
+       min_compiler_capability: 2
+ ```
+ 
++<!-- REVIEW: added per attempt-79-decoded-construct-predicates -->
++
++Construct predicates are expressed as decoded field paths, not prose. The
++construct registry fixture stores rows like:
++
++```yaml
++- id: retry
++  decoded_paths:
++    - Formula.Steps[].Retry
++    - Formula.Steps[].Children[].Retry
++    - Formula.Steps[].Loop.Body[].Retry
++    - Compose.Expand[].Template.Steps[].Retry
++  trigger: present
++  min_compiler_capability: 2
++```
++
++For metadata constructs, the decoded path points to the metadata field and the
++trigger references a row in `workflow_control_metadata.yaml`. For contribution
++constructs, the row names the traversal rule (`root`, `child`, `loop_body`,
++`inline_expansion`, `compose_expand`, `compose_map`, `aspect`,
++`transitive_import`) that brought the decoded field into the final recipe.
++The generator fails when a field path is present in prose but missing from the
++fixture, or when a fixture path no longer exists in the decoded formula types.
++
+ The registry must enumerate every workflow-control `gc.*` key and every
+ generated `gc.kind` value used by scope, cleanup, retry, Ralph continuation,
+ fanout, run/check, and workflow-finalize steps. CI fails when a generated
+@@ -462,6 +486,20 @@
+ formula, expansion, aspect, or nested body also contains one of the v2-only
+ constructs above.
+ 
++<!-- REVIEW: added per attempt-79-step-expand-semantics -->
++
++The `step.expand` decision is deliberately split from `compose.expand`.
++Authored `Step.Expand` and `expand_vars` are v2-only because they are decoded
++fields that directly materialize subgraph topology from a step. `compose.expand`,
++`compose.map`, and `compose.aspects` are traversal mechanisms: the traversal is
++v1-compatible until the contributed template or formula contains a registered
++v2-only construct. Matrix rows therefore use `construct_identity=step_expand`
++only for decoded authored step expansion, and use
++`contribution_path=compose_expand|compose_map|aspect|transitive_import` for
++constructs discovered while traversing contributed formulas. The generator
++fails if one row tries to use `construct_identity=step_expand` to mean both the
++authored field and the compose traversal.
++
+ Normalization rules:
+ 
+ - Requirements are normalized after formula layer resolution and inheritance,
+@@ -521,7 +559,7 @@
+   contribution_path:
+     [root_file, child_body, loop_body, inline_expansion, compose_expand, compose_map, aspect, transitive_import]
+   caller_path:
+-    [validate_only, show_preview, cook_root, cook_attach, sling_cli, sling_api, order_dispatch, controller_validation, fanout_fragment, convergence_create, convergence_retry, convergence_next_iteration, convoy_source_scan, dashboard_preview]
++    [validate_only, show_preview, cook_root, cook_attach, sling_cli_launch, sling_cli_attach, sling_api_launch, order_dispatch, controller_validation, retry_continuation, on_complete_continuation, fanout_parent, fanout_fragment, convergence_create, convergence_retry, convergence_next_iteration, convoy_source_scan, dashboard_preview]
+   workflow_control_metadata_registry: internal/formula/testdata/workflow_control_metadata.yaml
+ suites:
+   - id: caller-preflight
+@@ -1558,6 +1596,29 @@
+ | convergence create/retry/speculative wisp | snapshotted before convergence validation and used until either zero writes happen or the accepted compile artifact is persisted |
+ | reconciler/controller tick | snapshotted per tick; existing accepted roots use persisted metadata, new formulas use the tick snapshot |
+ 
++<!-- REVIEW: added per attempt-79-host-capability-edge-adapter -->
++
++Host capability construction has one shared edge adapter. The implementation
++adds an edge-only package, `internal/formulahost`, with:
++
++```go
++func FromCityConfig(cfg *config.City, source HostConfigSource) (formula.HostCapabilities, []formula.Diagnostic)
++```
++
++`FromCityConfig` is the only production code that translates
++`cfg.Daemon.FormulaV2`, promoted `cfg.Daemon.GraphWorkflows`, omitted defaults,
++config-generation ids, reload ids, source path, raw value, line, and column
++into `formula.HostCapabilityInput`. CLI commands, API handlers, order dispatch,
++controller ticks, convergence, fanout, tests that exercise production paths,
++and any future pack-validation command call this adapter before compiling.
++`cmd/gc/feature_flags.go:applyFeatureFlags` becomes a temporary compatibility
++shim that calls the adapter and may set legacy globals only for callers that
++have not yet migrated; it is not allowed to be the source of truth after
++caller sub-phase 4a. Static guard `TestNoFormulaHostCapabilityBypass` fails on
++new production calls to `formula.SetFormulaV2Enabled`,
++`formula.IsFormulaV2Enabled`, `molecule.SetGraphApplyEnabled`, or boolean-only
++host constructors outside the adapter, compatibility shim, and tests.
++
+ Caller inventory and required replacement behavior:
+ 
+ | Surface | Current risk | Required behavior |
+@@ -2287,6 +2348,29 @@
+ unexpired row lacks an immutable revision, content hash, contact/opt-out
+ record, or saved migration evidence.
+ 
++<!-- REVIEW: added per attempt-79-external-discovery-outreach -->
++
++External discovery and outreach are executable workflow inputs:
++
++| Field | Meaning |
++|---|---|
++| `discovery_method` | `installed_pack_scan`, `lockfile_scan`, `registry_query`, `known_partner`, `support_request`, or `manual_report` |
++| `maintainer_contact_status` | `unknown`, `contacted`, `acknowledged`, `opted_out`, `unreachable`, or `not_needed` |
++| `public_notice_url` | stable release-note, discussion, mailing-list, or docs URL announcing the alias window |
++| `notice_sent_at` | timestamp for direct maintainer notice when contact exists |
++| `support_window_closes_at` | timestamp derived from the alias-window clock and any explicit extension |
++| `migration_path` | `dual_declare`, `compat_branch`, `lts_binary`, `pin_pack_revision`, `maintainer_opt_out`, or `not_needed` |
++| `last_validated_at` | timestamp and artifact path for the latest validation run |
++
++The discovery command writes a JSON companion,
++`docs/release/formula-compiler-external-support.json`, with one row per
++external source and every field above. Alias removal is blocked while a row is
++`unknown`, `contacted` without elapsed support window, `unreachable` without a
++published public notice and immutable lock/cache evidence, or missing
++`last_validated_at`. A SHA-pinned external pack can leave support only through
++maintainer opt-out, a compatibility branch/LTS plan, or a validation artifact
++that proves the pinned object no longer needs legacy `contract`.
++
+ <!-- REVIEW: added per migration-gates-measurable -->
+ 
+ Additional compatibility gates:
+@@ -3021,6 +3105,60 @@
+ the producer subject bead or the workflow root bead, never in PID files, lock
+ files, or sidecar status files.
+ 
++<!-- REVIEW: added per attempt-79-order-diagnostic-subject -->
++
++The current `beads.Store` contract has `Create`, `Get`, `Update`,
++`SetMetadataBatch`, `List`, and metadata queries, but no compare-and-swap,
++unique metadata constraint, or atomic create-if-absent operation. Grouped
++diagnostics therefore cannot be implemented by a read-list-create loop against
++the current API; that would still duplicate groups under concurrent order
++dispatchers and could lose occurrence increments on restart or write failure.
++Before order/background diagnostics ship, the Task Store API must add and test
++two generic store operations:
++
++```go
++type MetadataCASResult struct {
++    Bead    beads.Bead
++    Swapped bool
++}
++
++func EnsureSingletonByMetadata(ctx context.Context, store beads.Store, bead beads.Bead, unique map[string]string) (beads.Bead, bool, error)
++func SetMetadataCompareAndSwap(ctx context.Context, store beads.Store, id string, expected map[string]string, set map[string]string) (MetadataCASResult, error)
++```
++
++`EnsureSingletonByMetadata` atomically returns the existing open or closed bead
++whose metadata contains the unique key set, or creates exactly one such bead.
++`SetMetadataCompareAndSwap` writes a batch only when the observed metadata
++still contains the expected generation/count/hash values, and returns the
++fresh bead when another writer won. `MemStore`, `FileStore`, `BdStore`, and
++exec-backed stores must all pass the same conformance tests; an implementation
++that cannot provide the atomicity must report an unsupported store diagnostic
++and the producer must fail closed before protected writes. Multi-key updates
++used for group state are encoded as one deterministic metadata blob plus an
++etag so external stores do not expose partial group records.
++
++Order dispatch uses a real diagnostic subject, not the wisp root and not the
++order-run history bead. The subject is a singleton bead with metadata:
++
++| Metadata key | Value |
++|---|---|
++| `gc.diagnostic_kind` | `formula-diagnostic-group` |
++| `gc.producer` | `order_dispatch` |
++| `gc.subject_id` | `order:<target scope>:<scoped order name>` |
++| `gc.order_name` | scoped order name |
++| `gc.formula_name` | selected formula |
++| `gc.diagnostic_group_key` | SHA-256 of producer, subject id, formula, OnceKey, host capability, and config generation |
++
++This bead is the durable subject for repeated disabled-host or malformed-formula
++failures before any order wisp exists. It is allowed diagnostic state; it is
++not labeled `order-run:<name>`, does not advance last-run/cooldown history,
++does not mark the order fired, and does not block future successful dispatch
++after the formula/config is fixed. The grouped state payload, occurrence
++count, first/last seen timestamps, scan series id, last write error, and event
++cadence etag are stored on that subject through `SetMetadataCompareAndSwap`.
++Concurrent producers retry on CAS loss by reloading the subject and applying
++the increment to the latest count.
++
+ <!-- REVIEW: added per attempt-73-diagnostic-state-boundary -->
+ 
+ "Zero protected writes" does not mean "no diagnostic-state writes." On fatal
+@@ -3063,6 +3201,38 @@
+ the next successful scan, or an operator invokes the producer's normal cleanup
+ path.
+ 
++<!-- REVIEW: added per attempt-79-order-preflight-ordering -->
++
++Formula-backed order dispatch has a stricter sequence than other background
++producers:
++
++1. Resolve the target store, host-capability snapshot, formula source, and scan
++   series id.
++2. Check trigger due-ness and open work without creating an order-run bead.
++3. Compile with `CompileWithResult`, accept the result, and validate the
++   artifact for `order_dispatch`.
++4. On any fatal formula diagnostic, ensure the diagnostic-subject singleton,
++   CAS-update grouped state, emit `order.formula_compile_failed` only when
++   cadence allows, and return.
++5. Only after acceptance succeeds, create or claim the order-run tracking bead
++   with a singleton metadata key for this scan series.
++6. Record `order.fired`, stamp fired/order-run metadata, apply route metadata,
++   create the wisp root and children, hook work, convoy links, and user-visible
++   history.
++
++No `order.fired` event, fired metadata, order-run tracking bead, wisp root,
++child bead, dependency, hook, convoy, route metadata, or last-run/cooldown
++history write may happen before step 5. If creating or claiming the order-run
++tracking bead races, the loser reloads the singleton and skips dispatch. If
++the diagnostic-subject write fails, the order returns a typed producer failure
++and still does not create tracking or runtime state. Fixtures must cover:
++three repeated scans, two concurrent dispatchers, restart after the first
++failure, CAS loss and retry, grouped-state write failure, successful recovery
++after enabling the host, burst-budget event cadence, config generation change,
++formula source change, and config flap `false -> true -> false`; every failure
++fixture snapshots fired metadata, wisp roots, children, hooks, convoys, route
++metadata, tracking beads, and last-run history as unchanged.
++
+ Ownership and update rules:
+ 
+ | Concern | Contract |
+@@ -3101,6 +3271,35 @@
+ | dashboard grouping | group by operator-fixable host/config diagnostics separately from author-fixable formula/pack diagnostics; grouping is derived from typed diagnostic fields |
+ | accepted proof nonce | random 16-byte nonce is part of the identity hash input and is never accepted by itself as proof |
+ 
++<!-- REVIEW: added per attempt-79-operation-status-warning-pin -->
++
++HTTP status is operation-aware and fixture-locked:
++
++| Diagnostic family | Preview/validate/report | Launch or durable producer API | Background producer |
++|---|---|---|---|
++| malformed formula source, wrong type, unknown axis, unsupported future formula capability | `400 Bad Request` with typed diagnostics | `400 Bad Request`; no protected writes | grouped diagnostic state plus producer failure event when configured |
++| `formula.compiler_requirement_conflict` | `400 Bad Request` | `409 Conflict`; the request selected a formula whose declared compatibility state conflicts with the launch precondition | grouped diagnostic state; no fired/runtime writes |
++| `formula.compiler_requirement_unsatisfied` | `400 Bad Request` because validation input is syntactically valid but cannot be satisfied by the supplied config | `409 Conflict`; current city config conflicts with the selected formula requirement | grouped diagnostic state; no fired/runtime writes |
++| `formula.host_capability_invalid` from production construction | `500 Internal Server Error` | `500 Internal Server Error`; no protected writes | typed producer failure with `LastWriteError` or invalid-host diagnostic |
++| warning-only legacy alias/version diagnostics | `200 OK` with warnings when JSON/preview surface supports them | operation status unchanged; warning persisted in accepted artifact when accepted | no Event Bus warning payload; optional grouped warning counter only |
++
++Warning messages and remediation are canonical strings across CLI, API-routed
++CLI, Huma JSON, generated TypeScript fixtures, dashboard state, reports, and
++accepted artifacts:
++
++| Code | Message | Remediation |
++|---|---|---|
++| `formula.contract_deprecated` | `contract = "graph.v2" is deprecated` | `use [requires] formula_compiler = ">=2"` |
++| `formula.version_deprecated` | `formula version is legacy metadata` | `use pack version, ref, or SHA for artifact identity` |
++| `formula.version_misuse` | `formula version does not enable compiler capability` | `add [requires] formula_compiler = ">=2" for v2-only syntax` |
++
++No surface may append local advice to these strings unless it uses a separate
++typed field such as docs link or producer id. Golden fixtures compare the
++message, remediation, warning `OnceKey`, source path/key/value, requirement
++source, content hash, and persistence decision for direct CLI, API-routed CLI,
++Huma response, dashboard, order dispatch, convergence, fanout, retry/controller
++validation, and release reports.
++
+ <!-- REVIEW: added per DR48-durable-alias-evidence -->
+ 
+ <!-- REVIEW: added per attempt-78-warning-persistence-cadence -->
+@@ -3498,6 +3697,25 @@
+ `requires_gc` exceeds it, resolver/import loading fails closed before staging,
+ shadow resolution, formula compile, or durable writes.
+ 
++<!-- REVIEW: added per attempt-79-requires-gc-comparator -->
++
++The active binary version source and comparator are executable release
++contracts:
++
++| Active build form | Version source | Comparator behavior |
++|---|---|---|
++| tagged release `vMAJOR.MINOR.PATCH` | embedded build version | normal semver comparison; build metadata ignored for ordering |
++| prerelease such as `v0.18.0-rc.1` | embedded build version | satisfies floors below `0.18.0`, satisfies the exact prerelease only when the floor includes that prerelease, and does not satisfy final `>=0.18.0` |
++| nightly or timestamped build derived from a tag | embedded base version plus commit SHA | satisfies floors up to the base version only when the build metadata records a non-dirty tree at or after the floor tag |
++| `main` source build with known commit | `git describe`/build info plus commit SHA | accepted for development validation, but release gates require a tagged baseline binary digest in `formula-compiler-compatibility.yaml` |
++| dirty source build | build info plus dirty marker | may run local validation but fails release gates and pack-floor enforcement reports as `active_binary_dirty` |
++| unknown or unparsable build version | none | pack resolver fails closed with `pack.requires_gc_active_version_unknown` before formula selection |
++
++The comparator is centralized in the packman-owned compatibility package and
++has golden rows for release, prerelease, nightly, `main`, dirty, source-build,
++and unknown-version inputs. Formula validation and pack acquisition call that
++comparator; they do not parse Gas City versions locally.
++
+ Pack-floor remediation is required when a formula compiler requirement exceeds
+ what the active binary can support. The validation report must include
+ `formula.migration.raise_pack_requires_gc` with the pack binding path, current
+@@ -4168,6 +4386,47 @@
+ published, the rollback clock resets to the next release that republishes dual
+ declarations and dual root stamps.
+ 
++<!-- REVIEW: added per attempt-79-release-clock-anchor -->
++
++The clock cannot start from a release note alone. The release that starts the
++alias window must save `docs/release/formula-compiler-alias-window-start.json`:
++
++```json
++{
++  "schema_version": 1,
++  "release_tag": "v0.x.y",
++  "release_date": "2026-05-11",
++  "release_captain": "name",
++  "contains_dual_declarations": true,
++  "contains_canonical_root_metadata": true,
++  "contains_typed_diagnostics": true,
++  "contains_docs_bundle": true,
++  "contains_stale_guidance_ci": true,
++  "input_artifacts": {
++    "compatibility": "docs/release/formula-compiler-compatibility.yaml",
++    "minimum_floor": "docs/release/formula-compiler-min-floor.json",
++    "external_support": "docs/release/formula-compiler-external-support.md",
++    "first_party_inventory": "docs/release/formula-compiler-first-party-inventory.json",
++    "docs_check": "docs/release/formula-compiler-docs-check.json"
++  },
++  "public_notice": {
++    "url": "",
++    "sent_at": "",
++    "support_window_closes_at": ""
++  }
++}
++```
++
++Missing files, empty public-notice fields, a release tag that is not in the
++supported distribution channel, or any `false` capability field means the alias
++clock has not started. Alias-drain is a sliding evidence window: before Phase 8
++or Phase 9, the latest release candidate and the previous completed minor
++release must both report zero first-party legacy-only formulas, zero
++first-party dual-declared formulas for alias removal, zero background accepted
++aliases, and zero active external support rows. A later accepted alias compile
++or newly discovered supported external pack resets the relevant drain window
++until two consecutive qualifying reports are saved.
++
+ Before Phase 8 begins, the release captain must attach an active-root report to
+ the release checklist. The report groups roots as accepted-artifact present,
+ legacy-only source available, legacy-only source missing, downgraded-host
+@@ -4786,6 +5045,31 @@
+ axis that affects persisted behavior bumps the requirements metadata schema
+ version and the accepted artifact version in the same change.
+ 
++<!-- REVIEW: added per attempt-79-axis-grammar-future-minima -->
++
++Requirement axis identifiers are byte-exact lowercase ASCII:
++`[a-z][a-z0-9_]{0,63}`. They may not contain dots, dashes, uppercase letters,
++Unicode, whitespace, empty segments, TOML dotted-table syntax, or user
++namespace prefixes. Unknown identifiers that match the grammar emit
++`formula.requirement_unknown_axis`; malformed identifiers reach the raw-shape
++or parser-boundary diagnostic appropriate to the TOML/JSON representation. V0
++knows only `formula_compiler`.
++
++Unsupported future compiler minima have several fixture rows, not only `>=3`:
++
++| Value | Diagnostic |
++|---|---|
++| `">=3"` | `formula.compiler_requirement_unsupported_future` with requested capability `3` |
++| `">=4"` | same diagnostic with requested capability `4` |
++| `">=99"` | same diagnostic with requested capability `99` |
++| maximum in-range ASCII integer above known capability | same diagnostic and no overflow |
++| overflow-sized ASCII integer | parser-boundary or invalid-syntax diagnostic as fixed by the grammar suite; never accepted |
++
++Combined future-axis fixtures cross unknown axis, unsupported future
++`formula_compiler`, host disabled, and source contribution. Unknown axes are
++reported before unsupported future compiler minima, and both are reported
++before host satisfaction because no normalized requirement is usable yet.
++
+ Explicit `formula_compiler = ">=1"` remains accepted v0 provenance for the
+ default formula compiler capability. It is behaviorally equivalent to omitted
+ requirements but source-attributed as `requires`; deprecating or removing it
+@@ -4847,6 +5131,25 @@
+ accepted-artifact validation result, workflow-root kind, convergence behavior,
+ fanout behavior, or dispatch behavior differs across those three inputs.
+ 
++<!-- REVIEW: added per attempt-79-default-artifact-identity -->
++
++Default-capability identity is also fixed for durable artifacts:
++
++| Identity surface | Omitted, empty table, and explicit `>=1` behavior |
++|---|---|
++| `CompileIdentity.CompileID` | identical when formula bytes, vars, options, search paths, host capability, and pack binding are otherwise identical |
++| `AcceptedArtifactIdentity` hash | identical; `RequirementSource` is excluded from the behavioral identity record |
++| accepted artifact ref | deduplicates to the same immutable ref when the accepted projection and provenance identity are otherwise identical |
++| workflow-root kind | `default_capability_workflow` for all three spellings |
++| convergence/fanout/retry validation | no behavioral difference; validation uses capability `1` only |
++| diagnostics and reports | may show `omitted`, empty-table source position, or `requires` provenance as display fields |
++
++If the accepted artifact serializer stores the display provenance for
++`RequirementSource`, that field is outside the proof hash and outside artifact
++deduplication. A future change that wants source spelling to affect artifact
++identity must introduce a new artifact version and old-reader fixtures; it may
++not change v0 hashes in place.
++
+ <!-- REVIEW: added per DR53-forward-compatibility-invariants -->
+ 
+ Forward-compatibility invariants are binding:

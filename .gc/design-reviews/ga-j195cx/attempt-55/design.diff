@@ -1,0 +1,468 @@
+--- .gc/design-reviews/ga-j195cx/attempt-55/design-before.md	2026-05-11 08:05:25.584680640 +0000
++++ engdocs/design/formula-compiler-requirements.md	2026-05-11 08:54:07.175744776 +0000
+@@ -628,6 +628,25 @@
+ see exactly which suite counts, diagnostic fixtures, docs rows, and tests must
+ change.
+ 
++<!-- REVIEW: added per DR55-raw-scanner-property-contract -->
++
++Raw capture has named differential tests:
++
++| Test | Contract |
++|---|---|
++| `TestRawRequirementScannerMatchesTOMLMetadata` | for every valid TOML fixture, raw key presence and decoded value shape match `toml.MetaData`, while raw bytes and source positions come only from the scanner |
++| `TestRawRequirementScannerDuplicateScalarKeys` | duplicate scalar keys, duplicate `[requires]` tables, and `[[requires]]` arrays of tables stop at the parser boundary or emit the fixture-locked duplicate diagnostic; no last-writer-wins normalization |
++| `FuzzRawRequirementScannerSourceAttribution` | random comments, whitespace, Unicode, control bytes, inline tables, dotted tables, nested tables, arrays, and malformed numeric strings never produce accepted requirements unless they exactly match the v0 grammar |
++| `TestJSONRequirementScannerDuplicateMembersFatal` | duplicate JSON object members are fatal whenever the JSON reader can report them; otherwise the JSON loader is marked unsupported for requirement-bearing formulas before durable writes |
++| `TestRawScannerPositionRoundTrip` | every structured diagnostic uses the scanner's byte-oriented line/column and escaped source value, not rendered parser text |
++
++The matrix seed PR must replace placeholder count expressions with literal
++integers for the grammar, raw-shape, JSON duplicate-member, construct-registry,
++contribution-traversal, projection-parity, and caller-preflight suites. The
++generator self-test prints the formula used to derive each count, but the
++checked fixture stores the literal count so accidental row loss is visible in
++review.
++
+ <!-- REVIEW: added per validation-matrix-independent-dimensions -->
+ 
+ The dimensions are intentionally independent. `construct_identity` says what
+@@ -1193,6 +1212,31 @@
+ Required `internal/sourceworkflow` APIs:
+ 
+ ```go
++type WorkflowRootKind string
++
++const (
++    WorkflowRootAny              WorkflowRootKind = "any"
++    WorkflowRootCanonicalOnly    WorkflowRootKind = "canonical_only"
++    WorkflowRootLegacyOnly       WorkflowRootKind = "legacy_only"
++    WorkflowRootDualStamped      WorkflowRootKind = "dual_stamped"
++    WorkflowRootKnownGraphOnly   WorkflowRootKind = "known_graph_only"
++    WorkflowRootUnknownFutureOnly WorkflowRootKind = "unknown_future_only"
++    WorkflowRootNeedsMigration   WorkflowRootKind = "needs_migration"
++)
++
++type SourceWorkflowScope struct {
++    SourceBeadID string
++    WorkflowID   string
++    IncludeClosed bool
++}
++
++type WorkflowRootCriteria struct {
++    Kind          WorkflowRootKind
++    Scope         SourceWorkflowScope
++    IncludeLegacy bool
++    IncludeClosed bool
++}
++
+ type WorkflowRootCapabilityKind string
+ 
+ const (
+@@ -1217,10 +1261,18 @@
+     Diagnostics               []formula.Diagnostic
+ }
+ 
+-func WorkflowRootFacts(metadata map[string]string) WorkflowRootFacts
++type WorkflowRootSnapshot struct {
++    ID        string
++    Status    beads.Status
++    SourceID  string
++    Metadata  map[string]string
++    Facts     WorkflowRootFacts
++}
++
++func ClassifyWorkflowRoot(metadata map[string]string) WorkflowRootFacts
+ func IsWorkflowRootMetadata(metadata map[string]string) bool
+ func IsGraphWorkflowMetadata(metadata map[string]string) bool
+-func WorkflowRootQuery(kind WorkflowRootKind, source SourceWorkflowScope) beads.ListQuery
++func ListWorkflowRoots(store beads.Store, criteria WorkflowRootCriteria) ([]WorkflowRootSnapshot, error)
+ func AcceptedCompileArtifactRef(metadata map[string]string) (string, bool)
+ ```
+ 
+@@ -1230,6 +1282,30 @@
+ all callers. New packages may not create a successor owner without first
+ deleting or moving the old one in the same change.
+ 
++<!-- REVIEW: added per DR55-sourceworkflow-typed-api -->
++
++`ListWorkflowRoots` is the migration boundary. Callers are not allowed to build
++their own `beads.ListQuery` for workflow roots, even when the current filter
++looks like a direct metadata match. The package may use `beads.ListQuery`
++internally for efficient first-pass selection, but it must always run the
++typed post-fetch predicate and return `WorkflowRootSnapshot` values whose
++`Facts` came from `ClassifyWorkflowRoot`. This prevents each caller from
++inventing subtly different exact, trim, case-fold, closed-history, or
++source-scope semantics.
++
++Phase 0 of caller migration must commit executable parity fixtures under
++`internal/sourceworkflow/testdata/workflow_root_parity/` before any caller is
++moved. The fixtures cover canonical-only, dual-stamped, legacy-only,
++graph-v2-only, closed-history, source-scoped, whitespace-variant, and
++case-variant stores. For each store, the golden output names the root ids
++returned by `ListWorkflowRoots`, the `WorkflowRootFacts.Kind` for each row, and
++the callers whose previous behavior must match: sling attach, convoy/source
++workflow scans, API workflow-root projections, order dispatch, convergence
++repair, and dashboard read models. Case variants are fixtures specifically so
++the compatibility rule stays narrow: canonical metadata is exact, while the
++legacy `gc.formula_contract` fallback trims only historical surrounding
++whitespace and never case-folds.
++
+ <!-- REVIEW: added per DR33-typed-root-facts -->
+ 
+ Boolean predicates are compatibility helpers over `WorkflowRootFacts`, not the
+@@ -1296,7 +1372,7 @@
+ | `internal/dispatch/fanout.go` and fanout expansion fragments | Runtime fragment compilation can happen after a durable root exists | Compile each fragment through `CompileWithResult` before fanout writes any child, convoy, or continuation metadata |
+ | `molecule.Instantiate` and fragment instantiation helpers | Generic instantiation can stamp roots or children from a raw `Recipe` | Require an accepted artifact or accepted fragment wrapper for every root, child, dependency, and hook write |
+ | `cmd/gc/cmd_convoy_dispatch.go` and convoy cleanup | Graph-only roots can be discovered by legacy metadata only | Use shared workflow-root predicate that accepts new and legacy metadata during migration |
+-| `internal/api` workflow-root read models | Duplicate predicates can diverge from CLI/sourceworkflow scans | Use `internal/sourceworkflow.WorkflowRootQuery` and typed facts for every workflow-root API projection |
++| `internal/api` workflow-root read models | Duplicate predicates can diverge from CLI/sourceworkflow scans | Use `internal/sourceworkflow.ListWorkflowRoots` and typed facts for every workflow-root API projection |
+ | `internal/api` global formula/order/control projections | API globals can reassemble graph state from root metadata | Project compiler requirement, graph kind, and diagnostics from typed facts only |
+ | `internal/api/handler_sling.go`, formula endpoints, order feeds, and convoy projections | HTTP status and dashboard-facing errors can diverge | Project `Diagnostic` without hand-written JSON or string parsing |
+ | `internal/convergence` create/retry/next iteration | Subset validation can drift from full compiler semantics or reuse stale artifacts | Accept a compiler artifact, project typed convergence fields, and reuse only persisted artifacts whose identity matches the existing root |
+@@ -1423,19 +1499,39 @@
+   current_behavior: selects graph formula-backed orders
+   durable_write_boundary: order fired metadata and wisp root creation
+   end_state: accepted_artifact_only
+-  replacement_api: internal/sourceworkflow.WorkflowRootQuery
++  replacement_api: internal/sourceworkflow.ListWorkflowRoots
+   owner: cmd/gc
+   expiry_phase: 4c
+-  blocking_test: TestOrderDispatchUsesWorkflowRootQuery
++  rollback_control: disable formula-backed order dispatch before fired metadata or wisp writes
++  blocking_test: TestOrderDispatchUsesListWorkflowRoots
+ ```
+ 
+ The generator fails when two raw predicate sites in one file collapse into one
+ manifest row or when a row lacks `line_pattern`, `occurrence_kind`,
+ `durable_write_boundary`, `end_state`, `replacement_api`, owner, expiry phase,
+-and blocking test. CI compares the raw-consumer scan to the manifest after
+-every caller migration sub-phase. A raw predicate/filter site may be deleted
+-only when the same change removes its manifest row and adds or updates the
+-replacement test.
++`rollback_control`, and blocking test. CI compares the raw-consumer scan to the
++manifest after every caller migration sub-phase. A raw predicate/filter site
++may be deleted only when the same change removes its manifest row and adds or
++updates the replacement test.
++
++The caller manifest is a Phase 0 acceptance artifact for the migration, not a
++later bookkeeping report. Before any production caller moves to accepted
++artifacts, the repository must contain a generated manifest row for each
++occurrence that can read formula requirement metadata, call a compile helper,
++authorize a durable write, invoke a runner-based `bd` probe, or project
++workflow-root state. "Each occurrence" means sling preflight and sling
++instantiation are separate rows; graph apply, molecule cook, molecule attach,
++order dispatch, convergence create, convergence retry, fanout fragment
++expansion, retry, `on_complete`, workflow-finalize, scope-check repair,
++missing-child repair, API projection, dashboard projection, and convoy scans
++are all separate rows even when they share a file.
++
++The manifest generator must record one durable-write boundary per row:
++`root`, `child`, `dependency`, `hook`, `convoy`, `tracking`, `retry_metadata`,
++`fanout_state`, `convergence_state`, `workflow_root_metadata`,
++`fired_order_metadata`, or `artifact_ref`. A zero-write fixture for a row must
++snapshot every boundary the row can touch and prove a fatal compile diagnostic
++changes none of them.
+ 
+ The manifest is updated in every caller-migration PR. A row can be removed only
+ when the static guard proves no production code path remains for that raw
+@@ -1461,7 +1557,7 @@
+     reason: parser and alias writer own raw compatibility fields
+   - package: internal/sourceworkflow
+     file: internal/sourceworkflow/*.go
+-    symbols: [IsWorkflowRootMetadata, WorkflowRootQuery]
++    symbols: [IsWorkflowRootMetadata, ListWorkflowRoots, ClassifyWorkflowRoot]
+     reason: shared predicate owns legacy metadata fallback during alias window
+ ```
+ 
+@@ -2458,6 +2554,21 @@
+ Interactive operator attempts are never hidden from their caller, but they do
+ not publish repeated Event Bus entries.
+ 
++Non-API packages use typed constructors, not local payload literals:
++
++```go
++func NewFormulaDiagnosticPayload(d formula.Diagnostic) FormulaDiagnosticPayload
++func NewOrderFormulaCompileFailedPayload(orderID string, generation uint64, state FormulaDiagnosticGroupState) OrderFormulaCompileFailedPayload
++func NewConvergenceFormulaCompileFailedPayload(convergenceID string, state FormulaDiagnosticGroupState) ConvergenceFormulaCompileFailedPayload
++```
++
++These helpers live with the registered event payload types, are usable from
++`cmd/gc`, order dispatch, convergence, controller, and retry/fanout packages,
++and mechanically project `Diagnostic.Attribution`. A static guard fails on
++formula compile-failure event payloads built with `map[string]any`,
++`json.RawMessage`, hand-written JSON strings, stderr parsing, or root-metadata
++reconstruction.
++
+ Required repeated-loop tests:
+ 
+ | Scenario | Assertion |
+@@ -2556,6 +2667,43 @@
+ }
+ ```
+ 
++The durable owner is the producer package that would otherwise have written
++runtime state: order dispatch owns order formula groups, convergence owns
++convergence formula groups, controller validation owns controller formula
++groups, and retry/fanout/finalize paths own their own subject groups. The
++shared formula package owns the payload shape and key construction only; it
++does not decide producer policy. State is persisted through the Task Store on
++the producer subject bead or the workflow root bead, never in PID files, lock
++files, or sidecar status files.
++
++Required producer API:
++
++```go
++type FormulaDiagnosticGroupKey struct {
++    Producer         string
++    SubjectID        string
++    OnceKey          string
++    HostCapability   string
++    ConfigGeneration uint64
++}
++
++func UpsertFormulaDiagnosticGroup(ctx context.Context, store beads.Store, key FormulaDiagnosticGroupKey, diagnostic FormulaDiagnosticPayload, now time.Time) (FormulaDiagnosticGroupState, error)
++func ClearFormulaDiagnosticGroup(ctx context.Context, store beads.Store, key FormulaDiagnosticGroupKey, reason string, now time.Time) error
++```
++
++The write order is fixed. On a fatal background diagnostic, the producer first
++computes the group key, then upserts grouped state in the Task Store, then
++emits the typed failure event when policy says an event is due, then returns
++without performing the protected write. If grouped-state upsert fails, the
++producer returns or emits a typed producer failure with `LastWriteError` and
++still performs zero formula root, child, hook, convoy, tracking, retry,
++convergence, fired-order, or artifact-ref writes. On restart or controller
++handoff, producers reload grouped state before applying in-memory LRU
++suppression. Cleanup is explicit: a group is cleared only when the subject is
++closed, the formula/config source changes, the diagnostic no longer occurs on
++the next successful scan, or an operator invokes the producer's normal cleanup
++path.
++
+ Ownership and update rules:
+ 
+ | Concern | Contract |
+@@ -2824,6 +2972,19 @@
+ graph and cache content, and reports when the schema cannot prove a release
+ gate.
+ 
++<!-- REVIEW: added per DR55-packman-schema2-prerequisite -->
++
++Any release gate that relies on durable content hashes, parent binding
++identity, transitive import identity, or lockfile-stored `requires_gc` evidence
++has a hard prerequisite: `internal/packman` must first land lockfile schema `2`
++with those fields, deterministic read/write tests, migration tests from schema
++`1`, and `docs/packv2/doc-packman.md` updates. Before schema `2`, validation
++commands may produce advisory provenance reports from resolver state and cache
++content, but `--alias-removal-gate`, first-party requires-only conversion,
++pack-floor enforcement for imported packs, and external pinned-pack support
++expiration must fail closed when their evidence would depend on a field schema
++`1` cannot prove.
++
+ Validation input contracts are fixed:
+ 
+ | Input | Required behavior |
+@@ -3286,7 +3447,18 @@
+     pattern: 'contract = "graph.v2"'
+     allow_only_with: ['deprecated', 'legacy', 'migration', 'alias-window']
+   - id: formula-version-selector
+-    pattern: 'version'
++    kind: parsed_toml_key
++    key: version
++    scope: formula_files_and_formula_toml_blocks
++    allow_only_with: ['legacy metadata', 'not semver', 'not a compiler selector', 'pack version/ref/SHA']
++  - id: formula-version-prose
++    kind: prose_context
++    path_globs:
++      - docs/reference/formula.md
++      - engdocs/architecture/formulas.md
++      - engdocs/proposals/formula-migration.md
++      - docs/tutorials/**/*.md
++    pattern: 'formula version'
+     allow_only_with: ['legacy metadata', 'not semver', 'not a compiler selector', 'pack version/ref/SHA']
+   - id: native-formula-production-rollback
+     pattern: 'GC_NATIVE_FORMULA=false'
+@@ -3305,6 +3477,24 @@
+ artifacts for each surface are pinned to the rollout phase that exposes that
+ surface:
+ 
++The local docs loop is a named command:
++
++```bash
++make formula-docs-check
++```
++
++It runs the formula-reference doctest, parsed formula-context stale-guidance
++scan, generated first-party inventory check, generated CLI help/schema check,
++PackV2 author-doc link check, and release-report schema validation. The command
++writes a stable JSON report to
++`docs/release/formula-compiler-docs-check.json` with `schema_version`,
++`generated_at`, `command`, `inputs`, `counts`, `stale_guidance[]`,
++`doctest_failures[]`, `inventory_failures[]`, and
++`generated_artifact_failures[]`. A sample report against the pre-migration tree
++is committed with expected failures so reviewers can tell scoped formula
++findings from unrelated uses of words such as "version" in Go, Node, release,
++runtime, or pack-import documentation.
++
+ | Surface | Same-branch generated/doc artifacts |
+ |---|---|
+ | CLI diagnostics or help | `docs/reference/formula.md`, `docs/reference/cli.md`, generated Cobra help, runnable examples |
+@@ -3397,6 +3587,26 @@
+ while `docs/release/formula-compiler-min-floor.json` says
+ `first_party_requires_only_allowed: false`.
+ 
++<!-- REVIEW: added per DR55-rollout-operable-gates -->
++
++Each phase has a PR home, owner, local command, and rollback unit:
++
++| Phase | PR home | Owner | Required local command | Rollback unit |
++|---|---|---|---|---|
++| 1 parser/model | `internal/formula` | formula owner | `go test ./internal/formula` | revert additive parser/model changes |
++| 2 compile result/artifacts/docs seed | `internal/formula`, `internal/sourceworkflow`, docs bundle | formula owner plus release captain | `go test ./internal/formula ./internal/sourceworkflow` and `make formula-docs-check` | disable diagnostic surfacing and leave callers on legacy wrappers |
++| 3 first-party dual/floor declaration | bundled packs, examples, fixtures | release captain | `gc formula validate --all-packs --legacy-contract-report --json` | restore previous pack source plus dual declarations |
++| 4 caller migration | owning caller package per sub-phase | caller package owner | package tests plus row-specific zero-write fixtures | disable that producer surface before its first durable write |
++| 5 compatibility bridge | release artifacts | release captain | `gc formula validate --compat-corpus internal/formula/testdata/compat_corpus --json` | keep dual source and dual root metadata |
++| 6 docs/examples completion | docs/reference, PackV2 docs, generated help/schema/API | docs owner plus release captain | `make formula-docs-check` and `make dashboard-check` when API/dashboard changes | revert docs surface or hide the matching diagnostic surface |
++| 7 pack-floor enforcement | `internal/packman`, resolver/import loading | packman owner | `go test ./internal/packman ./internal/formula` | disable resolver enforcement before formula selection |
++| 8 requires-only conversion | first-party packs and release artifacts | release captain | `gc formula validate --all-packs --alias-removal-gate --json` | republish dual declarations and reset alias-window clock |
++| 9 alias removal | parser and compatibility shims | release captain plus formula owner | alias-removal gate plus compatibility corpus | restore parser alias support before release |
++
++The release checklist must attach the command output artifact for each phase.
++An approval comment, PR description, or release-note statement is not evidence
++unless it cites the saved command output.
++
+ Phase 4 caller migration has one ordering rule: a durable producer cannot
+ switch to accepted artifacts until Phase 4a has landed `CompileResult`,
+ `AcceptedCompileArtifact`, the projection snapshot, shared workflow-root
+@@ -3654,40 +3864,57 @@
+ source-field meanings.
+ 
+ ```go
+-type SourceValue[T any] struct {
+-    Value      T
+-    SourcePath string
+-    SourceKey  string
+-    Line       int
+-    Column     int
+-}
++type ConvergenceFormulaView struct {
++    ArtifactRef          string
++    ArtifactIdentityHash string
++    Projection           formula.CompiledConvergenceProjection
++    PersistedProvenance  formula.Provenance // display/reporting only
++}
++
++func ProjectFormula(result *formula.CompileResult) (ConvergenceFormulaView, []formula.Diagnostic) // preview only
++func ProjectAcceptedFormula(artifact formula.AcceptedCompileArtifact) (ConvergenceFormulaView, []formula.Diagnostic)
++func ValidateProjection(view ConvergenceFormulaView, vars ConvergenceRuntimeInputs) []formula.Diagnostic
++```
++
++`ConvergenceFormulaView` is intentionally a thin view over
++`formula.CompiledConvergenceProjection`. It does not restate normalized
++requirements, host capability, pack binding identity, retry fields, runtime
++vars, or source paths as convergence-owned fields. When convergence needs to
++display provenance, it uses `PersistedProvenance` as provenance only; runtime,
++retry, repair, next-iteration, fanout, and speculative-wisp behavior must not
++branch on provenance, requirement source, host capability source, or artifact
++ref spelling. Behavior branches only on accepted-artifact validation and the
++compiler-owned projection fields.
++
++<!-- REVIEW: added per DR55-convergence-projection-collapse -->
++
++Projection parity is generated, not reviewed by eyeballing two structs. The
++implementation owns
++`internal/convergence/testdata/formula_projection_equivalence.yaml` with one
++row per compiler projection field:
+ 
+-type ConvergenceStepIdentity struct {
+-    StepID    SourceValue[string]
+-    StepTitle SourceValue[string]
+-}
+-
+-type ConvergenceMetadata struct {
+-    Enabled             SourceValue[bool]
+-    RequiredVars        []SourceValue[string]
+-    EvaluatePrompt      SourceValue[string]
+-    EvaluatePromptPath  SourceValue[string]
+-    SourceKey           string
+-    RelevantStep        ConvergenceStepIdentity
+-    ReservedStepIDs     []SourceValue[string]
+-    RetryPolicy         CompiledRetryPolicy
+-    RuntimeVars         []CompiledRuntimeVar
+-    SourceFormula       string
+-    SourcePath          string
+-    Provenance          Provenance
+-    Requirements        NormalizedRequirements
+-    CompileArtifactRef  string
+-}
+-
+-func ProjectFormula(result *formula.CompileResult) (ConvergenceMetadata, []formula.Diagnostic) // preview only
+-func ProjectAcceptedFormula(artifact formula.AcceptedCompileArtifact) (ConvergenceMetadata, []formula.Diagnostic)
+-func ValidateProjection(meta ConvergenceMetadata) []formula.Diagnostic
+-```
++```yaml
++- compiler_field: CompiledConvergenceProjection.RequiredVars
++  convergence_view_path: Projection.RequiredVars
++  owner: internal/formula
++  consumer: internal/convergence
++  may_branch: true
++  branch_reason: convergence required-var satisfaction
++- compiler_field: AcceptedCompileArtifact.Requirements
++  convergence_view_path: none
++  owner: internal/formula
++  consumer: provenance-only through accepted-artifact diagnostics
++  may_branch: false
++  branch_reason: requirements already decided before projection
++```
++
++CI fails when `CompiledConvergenceProjection` gains a field without an
++equivalence row, when `ConvergenceFormulaView` gains a duplicate field that is
++not a direct projection wrapper, or when production convergence code branches
++on `Requirements`, `HostCapabilities`, `RequirementSource`, `Provenance`,
++`ArtifactRef`, root metadata, or accepted-artifact identity strings. The only
++allowed identity branch is the formula-owned
++`ValidateAcceptedArtifact(writeIntent)` result before projection.
+ 
+ `ValidateProjection` emits only these convergence-domain diagnostic codes:
+ 
+@@ -3924,6 +4151,42 @@
+ | Requirement source | `RequirementSource` is attribution only; behavior uses normalized capability values, never source spelling. |
+ | Construct registry | Every construct registry entry has `min_compiler_capability` and source attribution; no boolean "is v2" helpers in new code. |
+ 
++<!-- REVIEW: added per DR55-provenance-non-authority -->
++
++Observable metadata is not behavioral authority. Requirement-source fields,
++normalized requirement projections, future-axis manifests, host-capability
++source values, provenance fields, migration hints, dashboard fields, generated
++TypeScript fields, release reports, and accepted-artifact display fields are
++diagnostic or provenance surfaces unless this document names a formula-owned
++validation function that consumes them. Runtime decisions are limited to:
++`internal/formula` requirement normalization and host satisfaction,
++`ValidateAcceptedArtifact(writeIntent)`, and
++`internal/sourceworkflow.ClassifyWorkflowRoot` for workflow-root visibility.
++Dispatch, convergence, retry, fanout, dashboard, API, release tooling, and
++external tools may display provenance, but they may not branch on whether a
++requirement came from omitted/default, `[requires]`, legacy `contract`, dual
++declaration, a particular host-source kind, or a pack/source spelling.
++
++Canonical axis manifests are byte-stable. `gc.formula_requirement_axes` is a
++comma-separated list of lowercase ASCII axis ids sorted by byte order with no
++spaces, duplicates, empty elements, or percent-encoding. V0 writes exactly
++`formula_compiler`. Unknown, malformed, duplicated, or unsorted manifests on an
++old reader classify the root as `unknown_future_capability_workflow` for
++observation only and fail closed for graph-specific writes.
++
++Default-capability equivalence fixtures are required:
++
++| Source spelling | Normalized capability identity | Allowed difference |
++|---|---|---|
++| omitted `[requires]` | compiler capability `1` | `RequirementSource=omitted` provenance |
++| empty `[requires]` | compiler capability `1` | source position for empty table when displayed |
++| `[requires] formula_compiler = ">=1"` | compiler capability `1` | `RequirementSource=requires` provenance |
++
++The normalized identity hash used for behavior excludes the source spelling
++above except for diagnostic/provenance fields. Tests fail if any runtime path,
++accepted-artifact validation result, workflow-root kind, convergence behavior,
++fanout behavior, or dispatch behavior differs across those three inputs.
++
+ <!-- REVIEW: added per DR53-forward-compatibility-invariants -->
+ 
+ Forward-compatibility invariants are binding:

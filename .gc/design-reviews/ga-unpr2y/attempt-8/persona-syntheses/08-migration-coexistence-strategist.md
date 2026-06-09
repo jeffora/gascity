@@ -1,0 +1,37 @@
+# Ravi Krishnamurthy
+
+**Persona verdict:** block
+
+**Sources:** Claude, Codex, DeepSeek V4 Flash
+
+**Consensus findings:**
+- [Blocker] One-writer ownership is still underspecified for collision-heavy metadata families. Claude shows the wake/hold/drain family is split across slices 2 and 5, with W-011 nudge keys not fixed and no wake-side fence comparable to `drain_generation`. DeepSeek shows the same class of split-brain risk for `session_key`: broad W-009 reconciler work can still clear runtime-identity fields while W-031/Slice 3 claims ownership. Codex agrees every slice needs an explicit bake rule proving old callers are removed, delegated through the same applier, or read-only.
+- [Blocker] The API end route remains dual-tracked and can collide with the in-flight worker-boundary migration. Claude and DeepSeek both call out W-014/W-015/W-016 and `internal/api/session_resolution.go` / `internal/api/session_manager.go` as overlap sites where "worker.Handle" versus "command factory" is not chosen. Codex raises the same issue as the API exception shrink path needing exact endpoint and symbol rows. The design must not let one migration retire a bypass through a different uncoordinated route.
+- [Blocker] Slice 3 is effectively a runtime-start/runtime-identity flag day, but the design does not choose and prove that strategy. Claude says the no-parallel-writer rule contradicts the six-phase gradual delegation text. DeepSeek says the resulting atomic cutover spans CLI, reconciler, and internal package paths. Codex requires the concrete one-writer matrix before later slices can be considered shippable.
+- [Major] Rollback contracts cover route restoration more than data-direction safety. Claude requires proof that restored legacy code converges over new-path metadata such as tokens, phase markers, close facts, and wake normalization. Codex asks for concrete rollback artifacts per adopting surface. DeepSeek praises per-key-family rollback as the right unit, but the reviewers still need slice-specific proof before bake.
+- [Major] Slice 0 guard, inventory, and workflow metadata gates are mandatory migration preconditions. Codex treats the missing guard, allowlist, source inventory, and `session_design.*` gate as current risks. DeepSeek supports Slice 0 as a strict non-mutating preflight. Claude adds that the inventory and worker-boundary status must be re-derived from the audited baseline, not a stale checkout.
+- [Minor] The "Validation differences allowed: None" language conflates user-visible parity with mechanical equivalence during bake. The design should state the parity promise separately from the fence, adapter, or convergence proof that makes a mixed old/new window safe.
+
+**Disagreements:**
+- Claude and DeepSeek verdict `block`; Codex verdict `approve-with-risks`. My assessment is `block` because the remaining issues are not just missing implementation artifacts. They are unresolved migration-shape decisions: API destination, one-writer ownership across overlapping slices, and whether Slice 3 is a flag day or adapter-mediated gradual migration.
+- Codex is willing to let Slice 0 produce the missing guard and inventory as a gated first deliverable. Claude and DeepSeek accept Slice 0 as valuable but still identify contradictions in later slice sequencing. My assessment: Slice 0 is necessary, but not sufficient; the design must also resolve the later ownership and rollback contracts before approval from this lane.
+- DeepSeek recommends a shared validation adapter/proxy so legacy and command writers can migrate sequentially. Claude says either declare an atomic flag day or specify the phased interim precisely. Codex asks for an all-or-nothing delegation matrix. My assessment: either approach can work, but the current text is unsafe because it implies gradual migration while forbidding parallel writers.
+- DeepSeek says API mutations should be anchored strictly on the worker boundary. Claude asks the design to choose the end route per caller surface and update the worker-boundary ledger. Codex frames this as an API exception shrink problem. My assessment: `worker.Handle` should be the default destination unless the design records a narrow approved exception with the same ledger and guard enforcement.
+
+**Missing evidence:**
+- Per-key owner split for wake/hold/drain, including W-004, W-006, W-007, W-011, W-023, W-025, W-029, drain keys, wake keys, `pin_awake`, `held_until`, and the wake-side fence or convergence argument.
+- Symbol-level split of W-009 versus W-031 for `session_reconciler.go` runtime-identity setters/clearers, including `session_key`, config-hash fields, and continuation-reset paths.
+- Endpoint and symbol matrix for W-014/W-015/W-016/W-025/W-029 that chooses `worker.Handle` versus an approved command route per API surface and updates the root worker-boundary migration ledger.
+- Exact Slice 3 caller list and switch plan covering W-005, W-012, W-022, W-031, `cmd_prime.go`, `session_lifecycle_parallel.go`, `session_reconciler.go`, `internal/session/chat.go`, API materialization, repair, commit, rollback, and continuation reset.
+- Revert-direction compatibility tests proving legacy code can converge over metadata written by the new path after a mid-bake revert, or a documented manual repair plan where convergence is impossible.
+- Slice 0 generated inventory, shrink-only allowlist, static guard fixtures, scenario parity source, vocabulary checkpoint, proof commands, and workflow gate enforcing the required `session_design.*` metadata.
+- A refreshed audited-baseline inventory and worker-boundary status; Claude notes the current sequencing evidence was taken from a stale checkout.
+
+**Required changes:**
+- Split wake/hold/drain into concrete owned keys with one owner slice per key and assign W-011 explicitly. Add the wake-side fence, shared adapter, or convergence proof that makes the slice-2 bake window safe.
+- State that runtime-identity symbols govern over broad W-009 reconciler file mappings. Move `session_key`, config-hash, and continuation-reset setters/clearers into Slice 3 or a named sub-slice with explicit validation, retirement, and rollback criteria.
+- Choose the API mutation end route per caller surface, preferably through `worker.Handle` unless a narrow exception is explicitly approved. Update the shared call-site plan and root worker-boundary migration notes in the same change.
+- Reconcile Slice 3 with the phased migration model. Either declare a flag-day conversion with the complete caller list, whole-slice revert blast radius, and one-writer proof, or introduce a shared validation adapter/proxy that lets legacy and command callers migrate sequentially without split-brain writes.
+- Extend rollback contracts with data-direction requirements: each slice must prove restored legacy code converges over new-path-written metadata before bake begins, or document the required repair procedure.
+- Make Slice 0 a mandatory first deliverable before any mutation-owning work: generated inventory, day-one seeded allowlist, AST/static guard with fixtures, scenario parity source, vocabulary checkpoint, proof commands, and a workflow gate for required `session_design.*` metadata.
+- Split broad rows such as W-014, W-025, W-026, W-029, W-030, and W-031 into child rows by endpoint, symbol, status/error shape, and owned key so closure criteria cannot be satisfied with prose-only groupings.

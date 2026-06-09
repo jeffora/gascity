@@ -1,0 +1,614 @@
+--- .gc/design-reviews/ga-j195cx/attempt-78/design-before.md	2026-05-11 20:24:47.760998608 +0000
++++ engdocs/design/formula-compiler-requirements.md	2026-05-11 21:21:56.950212868 +0000
+@@ -508,7 +508,7 @@
+ dimensions:
+   source_format: [toml, json]
+   requirement_shape:
+-    [omitted, empty_table, string, integer, float, boolean, array, inline_table, dotted_table, duplicate_table, unknown_axis]
++    [omitted, empty_table, string, integer, float, boolean, array, inline_table, dotted_table, nested_table, duplicate_table, duplicate_scalar_key, array_of_tables, top_level_requires_scalar, top_level_requires_array, unknown_axis]
+   requirement_value:
+     [omitted, ">=1", ">=2", "", "2", ">= 2", " >=2", ">=2 ", ">=2.0", ">=2.1", ">=3"]
+   contract_value: [omitted, graph.v2, graph.v1, other]
+@@ -608,6 +608,76 @@
+ expected source key, line, column, diagnostic code, diagnostic order, and
+ `diagnostic_count`.
+ 
++<!-- REVIEW: added per attempt-78-matrix-count-derivation -->
++
++The `caller-preflight` count lock of `18` is derived from concrete durable and
++preview callers, not from a prose total:
++
++| # | Caller path | Durable boundary |
++|---|---|---|
++| 1 | `validate_only` | none; diagnostic parity only |
++| 2 | `show_preview` | none; must not open a bead store |
++| 3 | `cook_root` | root, child, dependency, hook, workflow-root metadata |
++| 4 | `cook_attach` | attached child, dependency, hook, attachment metadata |
++| 5 | `sling_cli_launch` | root/wisp, child, convoy, hook, route metadata |
++| 6 | `sling_cli_attach` | attached molecule, dependency, hook |
++| 7 | `sling_api_launch` | root/wisp, child, hook, HTTP diagnostic body |
++| 8 | `order_dispatch` | fired metadata, wisp root, child beads |
++| 9 | `controller_validation` | producer diagnostic group only; no protected writes |
++| 10 | `retry_continuation` | retry-run bead, retry metadata, dependency, hook |
++| 11 | `on_complete_continuation` | attached molecule, continuation metadata, hook |
++| 12 | `fanout_parent` | fanout state, child fragments, convoy links |
++| 13 | `fanout_fragment` | fragment child, convoy, continuation metadata |
++| 14 | `convergence_create` | convergence root, iteration, hook, artifact ref |
++| 15 | `convergence_retry` | retry metadata, iteration, replacement child |
++| 16 | `convergence_next_iteration` | iteration bead, dependency, hook |
++| 17 | `convoy_source_scan` | no formula writes; shared predicate parity |
++| 18 | `dashboard_preview` | no writes; generated-client diagnostic parity |
++
++The generator reads this list from `internal/formula/testdata/caller_paths.yaml`
++and fails if a durable writer exists in the caller manifest without one
++preflight row. Splitting a caller into launch and attach, parent and fragment,
++or create and retry is required because each touches different protected
++boundaries.
++
++Raw-shape and combined-defect rows are explicit:
++
++| Input shape or defect set | Suite | First diagnostic / count rule |
++|---|---|---|
++| top-level `requires = ">=2"` | `raw-shape` | `formula.requirement_invalid_type`, `diagnostic_count=1` |
++| top-level `requires = []` or `[{}]` | `raw-shape` | `formula.requirement_invalid_type`, `diagnostic_count=1` |
++| `[[requires]]` array of tables | `raw-shape` | TOML parser boundary or fixture-locked duplicate/type diagnostic |
++| duplicate `formula_compiler` scalar keys | `raw-shape` | TOML parser boundary; no last-writer-wins normalization |
++| `[requires.formula_compiler]` nested or dotted table | `raw-shape` | `formula.requirement_invalid_type`, `diagnostic_count=1` |
++| unknown axis plus unsupported future `>=3` | `combined-defect` | unknown axis first, future diagnostic second if same valid source permits both |
++| malformed requirement plus disabled host | `combined-defect` | requirement syntax/type diagnostic only; host satisfaction does not run |
++| conflicting dual declaration plus legacy warning | `combined-defect` | conflict fatal plus deprecation warning with exact `diagnostic_count` |
++
++JSON support is named, not implicit. The implementation either keeps
++`source_format=json` rows and adds `internal/formula/json_loader.go` ownership,
++pointer attribution, duplicate-member tests, and Phase 2 docs examples, or
++retires the JSON formula loader before user-visible diagnostics ship and
++removes every JSON row from the matrix in the same PR. A JSON formula cannot
++remain enabled as an untested bypass.
++
++Every construct registry row cross-walks to the matrix identity that consumes
++it:
++
++| Registry entry | `construct_identity` | Axis minimum parser |
++|---|---|---|
++| step `check` | `check` | `formula_compiler` owner grammar |
++| legacy internal `ralph` | `ralph` | `formula_compiler` owner grammar |
++| retry table or metadata | `retry` | `formula_compiler` owner grammar |
++| `on_complete` | `on_complete` | `formula_compiler` owner grammar |
++| registered workflow-control metadata key | `workflow_metadata_key` | `formula_compiler` owner grammar |
++| registered workflow-control metadata enum value | `workflow_metadata_value` | `formula_compiler` owner grammar |
++| step or compose expansion | `step_expand` | `formula_compiler` owner grammar |
++| `expand_vars` | `expand_vars` | `formula_compiler` owner grammar |
++
++`AxisMinimum.Minimum` strings are parsed only by the owning axis grammar. No
++registry generator may parse `">=2"` with ad hoc string splitting, numeric
++coercion, trimming, or a generic semver helper.
++
+ Every suite row carries `row_kind`, `coverage_intent`, `dimension_owner`, and
+ `zero_write_assertion` when the caller can mutate state. The generator rejects a
+ durable caller row that lacks an explicit zero-write assertion for roots,
+@@ -1004,11 +1074,34 @@
+     OnceKey               string
+ }
+ 
++type HostCapabilitySourceKind string
++
++const (
++    HostCapabilitySourceOmittedDefault       HostCapabilitySourceKind = "omitted_default"
++    HostCapabilitySourceExplicitFormulaV2    HostCapabilitySourceKind = "explicit_formula_v2"
++    HostCapabilitySourceDeprecatedGraphWorkflows HostCapabilitySourceKind = "deprecated_graph_workflows"
++    HostCapabilitySourceTestOverride         HostCapabilitySourceKind = "test_override"
++)
++
++type HostCapabilitySource struct {
++    Kind             HostCapabilitySourceKind
++    Path             string
++    Key              string
++    RawValue         string
++    Line             int
++    Column           int
++    ConfigGeneration uint64
++    ReloadID         string
++}
++
++type HostCapabilityInput struct {
++    FormulaCompiler CompilerCapability
++    Source          HostCapabilitySource
++}
++
+ type HostCapabilities struct {
+     formulaCompiler  CompilerCapability
+-    source           string
+-    sourceKind       string
+-    configGeneration uint64
++    source           HostCapabilitySource
+ }
+ 
+ type CompileOptions struct {
+@@ -1086,41 +1179,65 @@
+ wrappers that build `CompileOptions` at the CLI/API edge. They may not be read
+ inside requirement normalization or satisfaction logic.
+ 
+-`HostCapabilities` has one authoritative capability field. The legacy
+-`[daemon] formula_v2` boolean is translated at the CLI/API/controller edge into
+-`CompilerCapabilityDefault` or `CompilerCapabilityV2`; it is not carried as a
+-second boolean inside the formula package because that would allow contradictory
+-host state. `Source` is diagnostic attribution, for example
+-`city.toml:[daemon].formula_v2`; `SourceKind` is one of `omitted_default`,
+-`explicit_formula_v2`, `deprecated_graph_workflows`, or `test_override`; and
+-`ConfigGeneration` records the config snapshot used by long-running producers.
++`HostCapabilities` has one authoritative capability field plus a structured
++source object. The legacy `[daemon] formula_v2` boolean is translated at the
++CLI/API/controller edge into `CompilerCapabilityDefault` or
++`CompilerCapabilityV2`; it is not carried as a second boolean inside the formula
++package because that would allow contradictory host state. The source object
++preserves the config path, key, raw value, source kind, source position, config
++generation, and reload id that produced the normalized capability.
+ 
+ <!-- REVIEW: added per DR48-host-capability-provenance -->
+ 
+ Omitted/default `formula_v2 = false`, explicit `formula_v2 = false`, explicit
+-`formula_v2 = true`, and deprecated `graph_workflows = true` promotion are
+-distinct provenance cases even when two cases normalize to the same capability.
+-Runtime behavior uses only the normalized `FormulaCompiler` value, but
+-diagnostics, accepted artifacts, release reports, and migration hints preserve
+-the source kind so operators can tell whether to add `formula_v2`, remove
+-`graph_workflows`, or change an explicit false value. `graph_workflows`
+-promotion is allowed only in the config edge adapter and must emit a
+-deprecation diagnostic on validation/display surfaces; it must not become a
+-second host-capability input inside `internal/formula`.
++`formula_v2 = true`, deprecated `graph_workflows = true` promotion, and
++test-only overrides are distinct provenance cases even when two cases normalize
++to the same capability. Runtime behavior uses only the normalized
++`FormulaCompiler` value, but diagnostics, accepted artifacts, release reports,
++and migration hints preserve the source object so operators can tell whether to
++add `formula_v2`, remove `graph_workflows`, change an explicit false value, or
++ignore a test-only override. `graph_workflows` promotion is allowed only in the
++config edge adapter and must emit a deprecation diagnostic on
++validation/display surfaces; it must not become a second host-capability input
++inside `internal/formula`.
+ 
+ Valid host capability values are exactly `CompilerCapabilityDefault` and
+-`CompilerCapabilityV2` in v0. `HostCapabilitiesFromFormulaV2` is the only
+-production constructor for the legacy boolean, and `HostCapabilitiesForTest`
+-is available only from `internal/formula/testonly` or `_test.go` files. The
+-fields are unexported so callers cannot bypass provenance, config-generation,
++`CompilerCapabilityV2` in v0. `NewHostCapabilities(input)` is the only
++production constructor. A legacy `formula_v2` adapter may exist at the config
++edge, but its input is still structured `HostCapabilityInput`; no production
++API accepts only `(enabled bool, source string)` as capability provenance.
++`HostCapabilitiesForTest` is available only from `internal/formula/testonly` or
++`_test.go` files and must set `Source.Kind=test_override`. The fields are
++unexported so callers cannot bypass provenance, config-generation, source-kind,
+ or value validation with struct literals. Accessors such as
+ `FormulaCompiler()`, `Source()`, `SourceKind()`, and `ConfigGeneration()` are
+-read-only projections. Any invalid value is rejected by `CheckRequirements` as
+-an internal configuration error diagnostic and never panics. Future values such
+-as `CompilerCapability(3)` are unsupported until the same change adds typed
+-parser support, diagnostics, metadata, docs, and tests. Satisfaction is
+-computed for every call from `CompileOptions.HostCapabilities`; it is not
+-cached on formula identity, process-global config, or pack resolution state.
++read-only projections. Any invalid value or incomplete source object is
++rejected by `CheckRequirements` as an internal configuration error diagnostic
++and never panics. Future values such as `CompilerCapability(3)` are unsupported
++until the same change adds typed parser support, diagnostics, metadata, docs,
++and tests. Satisfaction is computed for every call from
++`CompileOptions.HostCapabilities`; it is not cached on formula identity,
++process-global config, or pack resolution state.
++
++<!-- REVIEW: added per attempt-78-host-capability-provenance -->
++
++Host-capability provenance has golden fixtures across CLI, API, API-routed CLI,
++dashboard, Event Bus failure payloads, accepted artifacts, and release reports:
++
++| Fixture | Normalized capability | Required source object |
++|---|---|---|
++| omitted default | `1` | `Kind=omitted_default`, config path, key `daemon.formula_v2`, raw value `""`, generation |
++| explicit false | `1` | `Kind=explicit_formula_v2`, source path/key/value `false`, line, column, generation |
++| explicit true | `2` | `Kind=explicit_formula_v2`, source path/key/value `true`, line, column, generation |
++| deprecated alias promotion | `2` | `Kind=deprecated_graph_workflows`, source key `daemon.graph_workflows`, raw value, generation, deprecation diagnostic |
++| test override | `1` or `2` | `Kind=test_override`, test file path or fixture id, never accepted from production config |
++| config reload | current value | new generation and reload id; old producer groups keep the old generation |
++| host downgrade same identity | current value `1`, artifact value `2` | current source object in diagnostic state and original source object in the accepted artifact |
++
++`TestHostCapabilityProvenanceParity` is generated from these fixtures. It
++fails if any surface drops source kind, raw value, line/column when available,
++config generation, reload id, host capability, normalized requirement, or the
++same-identity artifact-reuse distinction.
+ 
+ Graph-apply enablement follows the same lifetime rule. Package globals such as
+ `SetGraphApplyEnabled` and `IsGraphApplyEnabled` may remain only as temporary
+@@ -1144,7 +1261,7 @@
+ func CheckRequirements(req NormalizedRequirements, host HostCapabilities) []Diagnostic
+ func AcceptCompileResult(result *CompileResult, identity CompileIdentity) (AcceptedCompileArtifact, []Diagnostic)
+ func ValidateAcceptedArtifact(artifact AcceptedCompileArtifact, intent CompileWriteIntent) []Diagnostic
+-func HostCapabilitiesFromFormulaV2(enabled bool, source string) HostCapabilities
++func NewHostCapabilities(input HostCapabilityInput) (HostCapabilities, []Diagnostic)
+ func RootMetadataFacts(metadata map[string]string) (RootMetadataFacts, []Diagnostic)
+ ```
+ 
+@@ -1496,6 +1613,31 @@
+ `Contract`, `declaresGraphV2Contract`, `Requires.FormulaCompiler`, or
+ `gc.formula_contract`.
+ 
++<!-- REVIEW: added per attempt-78-no-bypass-gate -->
++
++The transitional no-bypass gate blocks requires-only graph formulas until every
++durable writer is behind compiler acceptance. A first-party source PR may add
++`[requires] formula_compiler = ">=2"` during the alias window, but it may not
++remove `contract = "graph.v2"` or distribute requires-only graph formulas while
++any row below is not proven:
++
++| Gate row | Blocking proof |
++|---|---|
++| `Store.MolCook` and `Store.MolCookOn` | deleted, unexported behind accepted-artifact wrappers, or static-guarded so they cannot authorize requires-only writes |
++| bd-backed materialization | native compile/accept runs before any `bd` validation probe; probe output cannot create roots or children |
++| exec-store `mol-cook` / `mol-cook-on` | validation-only compatibility path or removed script operation; no script result authorizes durable writes |
++| convergence transition | shadow compile with `CompileWithResult` before every legacy subset-parser write until `ProjectAcceptedFormula` is the only durable path |
++| fanout and order dispatch | all selected parent/fragment/order formulas accepted before fired metadata, fanout state, convoy, or child writes |
++| API sling and dashboard/generated-client projection | Huma handlers project typed diagnostics and generated clients consume those fields; no metadata/string inference |
++| raw TOML and metadata consumers | raw-consumer allowlist contains only parser, compatibility writer, shared predicate, tests, fixtures, and docs |
++
++The gate is checked by `TestRequiresOnlyGraphFormulasCannotBypassAcceptance`.
++The test loads one requires-only graph fixture and drives CLI launch, API
++launch, formula order dispatch, convergence create/retry, fanout fragment
++expansion, and dashboard preview. Rejected cases assert zero protected writes;
++preview cases assert typed diagnostics only. The first-party inventory and
++minimum-floor report must remain blocking while this test is absent or failing.
++
+ <!-- REVIEW: added per attempt-54-durable-writer-end-states -->
+ 
+ Every caller-manifest row has exactly one end state:
+@@ -2023,6 +2165,29 @@
+ | `[requires] formula_compiler = ">=2"` only | Not supported for v2 formulas; old binary can miss the requirement | Fails with `formula.compiler_requirement_unsatisfied` | Works |
+ | Unsupported future requirement such as `>=3` | Not supported | Fails with `formula.compiler_requirement_unsupported_future` | Fails with `formula.compiler_requirement_unsupported_future` |
+ 
++<!-- REVIEW: added per attempt-78-compatibility-corpus-edges -->
++
++The compatibility corpus fixture-locks exact source spellings:
++
++| Source edge | Expected result |
++|---|---|
++| `contract = "graph.v2"` | accepted alias with `formula.contract_deprecated` |
++| `contract = " graph.v2"`, `"graph.v2 "`, `"Graph.V2"`, `"GRAPH.V2"` | unsupported legacy contract; no trim or case fold for source files |
++| `contract = "graph.v1"` or any other string | `formula.compiler_requirement_unsupported` |
++| omitted `[requires]` and no v2-only construct | default capability |
++| empty `[requires]` and no v2-only construct | default capability with empty-table provenance |
++| explicit `[requires] formula_compiler = ">=1"` and no v2-only construct | default capability with `requires` provenance |
++| omitted, empty, or `>=1` plus a v2-only construct | `formula.compiler_requirement_missing` |
++| dual `contract = "graph.v2"` plus `>=2` | accepted as source `dual` with deprecation warning |
++| dual `contract = "graph.v2"` plus omitted, empty, or `>=1` | `formula.compiler_requirement_conflict` |
++| dual `contract = "graph.v2"` plus malformed or future requirement | requirement syntax/future diagnostic before host satisfaction |
++
++Legacy root metadata is a different compatibility surface: the shared
++workflow-root predicate may trim historical surrounding whitespace in
++`gc.formula_contract`, but source formula parsing remains byte-exact. The
++matrix has separate rows for source alias parsing and persisted root metadata
++fallback so the two rules cannot drift.
++
+ Runtime compatibility decision:
+ 
+ The live production runtime uses the native Go formula compiler only. Sling,
+@@ -2113,6 +2278,15 @@
+ unless the artifact names a compatibility branch, LTS binary, or explicit
+ maintainer opt-out path.
+ 
++The external migration report is typed evidence, not prose. Each support row in
++`docs/release/formula-compiler-external-support.md` or its generated JSON
++companion records `source_class`, `pack_name`, `source`, `requested_ref`,
++`locked_revision`, `content_hash`, `binding_path`, `maintainer_contact`,
++`support_strategy`, `support_expires_after_release`, `support_expires_at`,
++`evidence_artifact`, and `status`. Alias removal fails while any active or
++unexpired row lacks an immutable revision, content hash, contact/opt-out
++record, or saved migration evidence.
++
+ <!-- REVIEW: added per migration-gates-measurable -->
+ 
+ Additional compatibility gates:
+@@ -2503,11 +2677,12 @@
+ any new runtime state when the host capability is disabled.
+ 
+ At config load, `[daemon] formula_v2 = true` maps through
+-`HostCapabilitiesFromFormulaV2(true, "city.toml:[daemon].formula_v2")`; false
+-maps through the same constructor with `false`. The boolean exists only as
+-legacy config vocabulary at the edge; the constructor's typed
+-`FormulaCompiler()` value is the canonical capability used by
+-`CheckRequirements`.
++`NewHostCapabilities(HostCapabilityInput{FormulaCompiler: CompilerCapabilityV2,
++Source: ...})`; false maps through the same constructor with
++`CompilerCapabilityDefault`. The boolean exists only as legacy config
++vocabulary at the edge; the constructor's typed `FormulaCompiler()` value and
++structured `Source()` object are the canonical capability and provenance used
++by `CheckRequirements`.
+ 
+ Required diagnostic codes:
+ 
+@@ -2920,6 +3095,7 @@
+ | validation HTTP status | `400 Bad Request` for formula source/config diagnostics; `500` only for internal I/O or invariant failures |
+ | warning LRU | per-city, per-producer in-memory LRU capped at 4096 keys; eviction is observable but not release evidence |
+ | CLI suppression key | `OnceKey` plus command invocation; warnings repeat across separate commands, fatal diagnostics never hide from the caller |
++| CLI warning controls | `--quiet` suppresses warning display only on validation/show/report commands that still return warning diagnostics in JSON; launch commands keep fatal diagnostics visible and may use `--warnings=once` for CI logs |
+ | report schema versioning | every JSON report has `schema_version`, `producer`, `generated_at`, and stable diagnostic/migration-hint arrays |
+ | non-formula `contract` terminology | docs may use "contract" only for legacy formula aliasing or unrelated non-formula APIs that explicitly say they are not compiler requirements |
+ | dashboard grouping | group by operator-fixable host/config diagnostics separately from author-fixable formula/pack diagnostics; grouping is derived from typed diagnostic fields |
+@@ -2927,6 +3103,52 @@
+ 
+ <!-- REVIEW: added per DR48-durable-alias-evidence -->
+ 
++<!-- REVIEW: added per attempt-78-warning-persistence-cadence -->
++
++Accepted warnings have one durable persistence shape. A warning that survives
++acceptance is stored as `AcceptedWarningRecord` inside the accepted compile
++artifact; background producers may also mirror a grouped counter on their
++subject bead for dashboard/reporting cadence, but the artifact record remains
++the source of truth for release evidence:
++
++```go
++type AcceptedWarningRecord struct {
++    SchemaVersion    int
++    Diagnostic       FormulaDiagnosticPayload
++    OnceKey          string
++    Formula          string
++    Producer         string
++    SubjectID        string
++    ContentHash      string
++    RequirementSource string
++    HostCapability   string
++    ConfigGeneration uint64
++    FirstSeenAt      time.Time
++    LastSeenAt       time.Time
++    OccurrenceCount  int
++    LastSurface      string
++}
++```
++
++The grouping key for accepted warnings is
++`(code, formula, source path, source key, source value, content hash,
++producer, subject id, config generation)`. First occurrence writes the warning
++record with `OccurrenceCount=1`. Repeat scans update `LastSeenAt` and count;
++successful config reload starts a new group because the host/source
++attribution changed. Host toggles update the host-capability field but do not
++erase the accepted warning from the artifact. Process restarts reload producer
++state from the Task Store and accepted artifacts before applying the in-memory
++LRU. LRU eviction can increase display frequency, but it is never release
++evidence and never deletes warning records.
++
++Warning fixtures are required for `formula.contract_deprecated`,
++`formula.version_deprecated`, and `formula.version_misuse` across direct CLI,
++API-routed CLI, Huma preview, dashboard state, order dispatch, convergence,
++fanout, retry/controller validation, and release reports. Each fixture asserts
++whether the surface displays the warning, persists the warning, increments a
++producer counter, emits no Event Bus warning payload, and contributes to alias
++removal or version-misuse release counters.
++
+ Legacy-alias evidence is durable and recomputable. Process-local warning
+ suppression is only a UX optimization and is never used as release evidence.
+ The authoritative sources for accepted legacy `contract = "graph.v2"` usage
+@@ -3195,6 +3417,26 @@
+ `registry_mirror`. Schema `1` behavior is fail-closed for release gates and
+ read-only for compatibility reports.
+ 
++<!-- REVIEW: added per attempt-78-packman-provenance-phase -->
++
++Packman provenance readiness is its own rollout unit before pack-floor
++enforcement:
++
++| Readiness item | Contract |
++|---|---|
++| PR home | `internal/packman`, `cmd/gc` pack validation commands, `docs/packv2/doc-packman.md`, and release artifact schemas |
++| owner | packman owner, with release-captain approval for release-gate schema fields |
++| saved artifacts | schema migration report, schema-1 read report, schema-2 write/read round-trip report, requirement-diff sample, external pinned-pack inventory sample |
++| schema-1 behavior | fail closed for alias removal, imported-pack floor enforcement, first-party requires-only conversion, and external support expiration; advisory reports are allowed only when marked `evidence_incomplete` |
++| rollback unit | disable resolver/import enforcement and keep reports advisory; never rewrite schema-2 locks back to schema 1 without a packman-owned migration command |
++| blocking command | `gc formula validate --all-packs --provenance --json` plus `go test ./internal/packman ./internal/formula` |
++
++Pack-floor enforcement may not share a PR with the first schema-2 writer unless
++the PR also includes schema-1 rollback/read compatibility tests and saved
++evidence artifacts. If schema `2` is replaced by an equivalent provenance
++contract, that contract must still live under packman ownership and expose the
++same fields to formula validation through typed APIs, not through path parsing.
++
+ External author commands are stable JSON surfaces:
+ 
+ | Command | Success exit | Diagnostic exit | Required fields |
+@@ -3475,6 +3717,16 @@
+ | Dashboard generated types | Typed diagnostics and workflow requirement fields |
+ | PackV2 author docs | Pack-level compatibility constraints, import refs, and formula `[requires]` distinction |
+ 
++<!-- REVIEW: added per attempt-78-docs-proposal-alignment -->
++
++`engdocs/proposals/formula-migration.md` is updated or frontmatter-marked
++`superseded_by: engdocs/design/formula-compiler-requirements.md` in Phase 2,
++the same phase that first creates typed diagnostics and docs fixtures. The
++proposal may remain as historical context, but stale rollback language,
++`GC_NATIVE_FORMULA=false` as production fallback, formula `version` as identity,
++or `contract` as canonical graph syntax must be either removed or explicitly
++scoped as superseded before any requirement diagnostic is visible to users.
++
+ User-visible diagnostic rollout is blocked until the docs/example bundle lands
+ in the same PR stack. A diagnostic is user-visible when it can appear in CLI
+ stderr, HTTP/API responses, dashboard state, generated client types, controller
+@@ -3549,6 +3801,16 @@
+ | pack consumer pins a reproducible workflow set | import ref, semver, tag, branch, SHA, and `packs.lock` | formula header fields |
+ | legacy formula author migrates `contract` | add `[requires] formula_compiler = ">=2"` and keep `contract` only during alias window | removing `contract` before the release floor allows it |
+ 
++The reference page must also include a common-confusion table:
++
++| Confused surface | Correct distinction |
++|---|---|
++| Formula `[requires]` vs host `[daemon] formula_v2` | formula authors declare what the formula needs; operators decide whether this city can satisfy it |
++| Formula `[requires]` vs `[pack].requires_gc` | formula requirements gate compiler capability; pack requirements gate the minimum Gas City binary before pack selection |
++| `[pack].requires_gc` vs `packs.lock` revision | pack metadata declares compatibility; the lockfile records the resolved revision/content identity |
++| Formula `version` vs pack ref/SHA | formula `version` is legacy metadata only; pack ref/SHA is the reproducibility boundary |
++| Legacy `contract` vs canonical `[requires]` | `contract` is an alias-window compatibility spelling and never the canonical surface |
++
+ External-pack examples must pair formula and pack compatibility in one runnable
+ fixture:
+ 
+@@ -3698,6 +3960,22 @@
+   - id: compiler-selector-wording
+     pattern: 'selects the compiler'
+     allow_only_with: ['does not select']
++  - id: formula-v2-positive-content
++    kind: required_positive_context
++    path_globs:
++      - docs/reference/config.md
++      - engdocs/architecture/formulas.md
++      - engdocs/proposals/formula-migration.md
++    pattern: 'formula_v2'
++    require_any: ['host capability', 'operator capability', 'does not select the compiler']
++  - id: requires-positive-content
++    kind: required_positive_context
++    path_globs:
++      - docs/reference/formula.md
++      - docs/tutorials/**/*.md
++      - examples/**/*.md
++    pattern: 'formula_compiler'
++    require_any: ['[requires]', 'minimum formula compiler capability']
+ exceptions:
+   - path_glob: engdocs/archive/**
+     reason: historical material
+@@ -3720,7 +3998,8 @@
+ controller/order/convergence events, or release validation output. It runs the
+ formula-reference doctest, parsed formula-context stale-guidance scan,
+ generated first-party inventory check, generated CLI help/schema check,
+-PackV2 author-doc link check, and release-report schema validation. The command
++PackV2 author-doc link check, JSON-loader policy check, proposal-supersession
++check, and release-report schema validation. The command
+ writes a stable JSON report to
+ `docs/release/formula-compiler-docs-check.json` with `schema_version`,
+ `generated_at`, `command`, `inputs`, `counts`, `stale_guidance[]`,
+@@ -3745,6 +4024,13 @@
+ allows requires-only first-party distribution. A PR that exposes a diagnostic
+ surface cannot rely on a later docs PR or a later source-conversion PR.
+ 
++JSON formulas have a Phase 2 decision gate. If the JSON loader remains enabled,
++Phase 2 docs include JSON examples, doctests, pointer-attribution fixtures, and
++the matrix rows named above. If JSON formulas are retired first, Phase 2 removes
++the loader and documents TOML as the only accepted authoring surface. There is
++no state where JSON remains enabled without docs and fixtures for
++`requires.formula_compiler`.
++
+ `formula.version_deprecated` is emitted only by validation/display surfaces
+ (`gc formula validate`, `gc formula show`, and formula API previews). Launch,
+ order dispatch, retry, convergence, and controller paths preserve legacy
+@@ -3780,6 +4066,7 @@
+ | dashboard remediation affordances | dashboard may show typed remediation text, source links, copyable snippets from fixtures, and docs links; it may not offer automatic source edits in v0 |
+ | Phase 5 deliverable | compatibility bridge output is `docs/release/formula-compiler-compatibility.yaml` plus compat-corpus JSON, not an informal status note |
+ | future grammar growth | `formula_compiler` remains monotonic integer minima only; non-monotonic requirements need a new typed axis |
++| non-`>=` operators | `=`, `==`, `<`, `<=`, `~>`, caret, wildcard, and comma/range expressions are invalid syntax in v0, not reserved accepted forms |
+ | default-capability identity | omitted, empty `[requires]`, and explicit `>=1` share runtime identity and differ only in provenance/display fields |
+ 
+ ## Rollout Plan
+@@ -3795,7 +4082,9 @@
+    `AcceptedCompileArtifact`, canonical metadata keys, dual-stamping, and the
+    shared workflow-root predicate. The docs/example/generated-help bundle for
+    any diagnostic that can become visible in later phases lands here, before
+-   that diagnostic is exposed to operators.
++   that diagnostic is exposed to operators. This phase also marks
++   `engdocs/proposals/formula-migration.md` superseded or updates it in place,
++   and either fixtures JSON formula requirements or retires the JSON loader.
+ 3. First-party pack-floor declaration: write or update first-party `[pack]
+    requires_gc` floors for built-in graph packs, `.gc/system/packs`, examples,
+    tutorials, fixtures, and Ralph demo packs from
+@@ -3816,11 +4105,13 @@
+    surface may wait until Phase 6 for its required docs, help, schema, OpenAPI,
+    dashboard, example, or stale-guidance artifact. Legacy `contract` appears
+    only in migration notes.
+-7. Pack-floor enforcement: after packman schema `2` or an equivalent
+-   packman-owned provenance contract lands, enforce `[pack] requires_gc`, seed
+-   or refresh the compatibility/minimum-floor/external-support artifacts, and
+-   prove incompatible packs are rejected before formula selection, staging,
+-   shadow resolution, or durable writes.
++7a. Packman provenance contract: land packman-owned schema `2` or equivalent
++    typed provenance APIs, saved schema/read/write artifacts, and schema-1
++    fail-closed release-gate behavior. This phase does not enforce pack floors.
++7b. Pack-floor enforcement: after 7a lands, enforce `[pack] requires_gc`, seed
++    or refresh the compatibility/minimum-floor/external-support artifacts, and
++    prove incompatible packs are rejected before formula selection, staging,
++    shadow resolution, or durable writes.
+ 8. First-party requires-only conversion: remove first-party `contract` source
+    aliases only after the minimum binary floor is enforced, the optional `bd`
+    compatibility strategy is complete, and active roots have been drained,
+@@ -3849,7 +4140,8 @@
+ | 4 caller migration | owning caller package per sub-phase | caller package owner | package tests plus row-specific zero-write fixtures | disable that producer surface before its first durable write |
+ | 5 compatibility bridge | release artifacts | release captain | `gc formula validate --compat-corpus internal/formula/testdata/compat_corpus --json` | keep dual source and dual root metadata |
+ | 6 docs/examples completion | docs/reference, PackV2 docs, generated help/schema/API | docs owner plus release captain | `make formula-docs-check` and `make dashboard-check` when API/dashboard changes | revert docs surface or hide the matching diagnostic surface |
+-| 7 pack-floor enforcement | `internal/packman`, resolver/import loading | packman owner | `go test ./internal/packman ./internal/formula` | disable resolver enforcement before formula selection |
++| 7a packman provenance contract | `internal/packman`, `docs/packv2`, release schemas | packman owner plus release captain | schema migration/read-write reports and `go test ./internal/packman` | keep schema-1 advisory reports and block release gates that need provenance |
++| 7b pack-floor enforcement | `internal/packman`, resolver/import loading | packman owner | `go test ./internal/packman ./internal/formula` | disable resolver enforcement before formula selection |
+ | 8 requires-only conversion | first-party packs and release artifacts | release captain | `gc formula validate --all-packs --alias-removal-gate --json` | republish dual declarations and reset alias-window clock |
+ | 9 alias removal | parser and compatibility shims | release captain plus formula owner | alias-removal gate plus compatibility corpus | restore parser alias support before release |
+ 
+@@ -4160,10 +4452,21 @@
+     PersistedProvenance  formula.Provenance // display/reporting only
+ }
+ 
++type ConvergenceRuntimeVarValue struct {
++    Name          string
++    Value         string
++    Source        formula.DiagnosticSource
++    SatisfiedBy   string // explicit, default, secret_ref, or missing
++    Redaction     string // none, redacted, hmac
++    ValueHash     string
++    DuplicateOf   string
++}
++
+ type ConvergenceRuntimeInputs struct {
+     RootID            string
+     Operation         string
+-    Vars              map[string]string
++    RuntimeVars       []ConvergenceRuntimeVarValue
++    VarsHash          string
+     ExistingArtifactRef string
+     ExpectedIdentityHash string
+     CurrentHost      formula.HostCapabilities
+@@ -4186,11 +4489,16 @@
+ 
+ `ConvergenceRuntimeInputs` is validated against accepted projection facts.
+ `ExistingArtifactRef` and `ExpectedIdentityHash` must match the artifact already
+-validated by `ValidateAcceptedArtifact`; `Vars` are checked only against
+-projected runtime-var requirements; `CurrentHost` is recorded for diagnostics
+-but cannot reauthorize a changed-identity write. Unknown keys in `Vars` are
+-reported according to convergence policy; missing required vars fail before
+-root, iteration, retry, hook, dependency, convoy, or speculative-wisp writes.
++validated by `ValidateAcceptedArtifact`. Runtime vars are typed evidence:
++explicit caller values, compiler defaults, secret references, missing values,
++duplicates, value source, redaction mode, and value hash are preserved before
++validation. `VarsHash` is computed from the accepted runtime-var projection and
++the redacted value evidence, not from map iteration order. `CurrentHost` is
++recorded for diagnostics but cannot reauthorize a changed-identity write.
++Unknown runtime-var names are reported according to convergence policy;
++duplicate names preserve all sources and emit the fixture-locked diagnostic
++order; missing required vars fail before root, iteration, retry, hook,
++dependency, convoy, or speculative-wisp writes.
+ 
+ <!-- REVIEW: added per DR55-convergence-projection-collapse -->
+ 
+@@ -4411,6 +4719,27 @@
+ writes. The conflict fixture covers same ref under duplicate keys, different
+ refs, missing ref, stale ref, and unsupported artifact schema.
+ 
++<!-- REVIEW: added per attempt-78-convergence-artifact-contract -->
++
++Convergence artifact references have one precedence rule:
++
++| Metadata shape | Runtime behavior |
++|---|---|
++| canonical `gc.convergence_formula_compile_artifact` only | load and validate through formula-owned artifact loader |
++| canonical plus legacy alias with same value | accepted during dual-stamp migration, emits migration warning on display/report surfaces only |
++| canonical plus legacy alias with different values | `convergence.formula_artifact_conflict`, zero writes |
++| legacy alias only | display-only; operator repair command must restamp canonical key before graph-specific mutation |
++| no artifact ref | observation only for existing roots; new writes require compile/accept first |
++| unsupported artifact schema | display diagnostic and zero graph-specific writes |
++
++Dual-stamp migration is allowed only for roots created before convergence
++callers complete sub-phase 4f. New convergence roots write only the canonical
++key plus future-readable formula metadata. The repair command may remove alias
++keys only after it has loaded the canonical artifact, validated identity, and
++written a release-report row naming the old and new keys. Conflict and repair
++fixtures assert zero writes to iteration, retry, child, convoy, hook, and
++artifact-ref metadata when precedence cannot be resolved.
++
+ Required migration rows:
+ 
+ | Path | Required signature/flow | Zero-write test |

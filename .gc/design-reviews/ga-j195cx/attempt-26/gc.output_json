@@ -1,0 +1,22 @@
+{
+  "personas": [
+    {
+      "slug": "01-compiler-boundary-invariant",
+      "wave": 1,
+      "name": "Nadia Sorenson",
+      "mandate": "active binary ownership;normalized requirements;internal formula authority;ZFC and layering",
+      "questions": [
+        "Does the design keep the active Gas City binary as the only compiler decision-maker rather than letting formulas select implementations?",
+        "Is requirement normalization implemented in one internal/formula path so callers never check raw contract strings?",
+        "Are formula-v2 constructs validated in internal/formula while CLI, orders, sling, API, and convergence consume typed results?"
+      ],
+      "red_flags": [
+        "formula selects a compiler implementation at runtime",
+        "raw contract remains the canonical decision point",
+        "requirement checks duplicated across projections and drift\n02-contract-migration-guardian"
+      ],
+      "questions_text": "Does the design keep the active Gas City binary as the only compiler decision-maker rather than letting formulas select implementations?;Is requirement normalization implemented in one internal/formula path so callers never check raw contract strings?;Are formula-v2 constructs validated in internal/formula while CLI, orders, sling, API, and convergence consume typed results?",
+      "red_flags_text": "formula selects a compiler implementation at runtime;raw contract remains the canonical decision point;requirement checks duplicated across projections and drift\n02-contract-migration-guardian"
+    }
+  ]
+}

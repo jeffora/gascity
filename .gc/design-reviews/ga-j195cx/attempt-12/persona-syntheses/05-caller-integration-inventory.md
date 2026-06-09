@@ -1,0 +1,33 @@
+# Yuki Patel
+
+**Persona verdict:** block
+
+**Sources:** Claude, Codex
+
+**Consensus findings:**
+- [Blocker] The dispatch fanout expansion-fragment compile path is missing from the executable caller inventory. Both reviews identify `internal/dispatch/fanout.go` and `formula.CompileExpansionFragment` as a runtime compile path that can create new fragment beads after the root was created. The design must state how fragments get normalized requirements, host-capability checks, diagnostics, and no-partial-write tests, especially when `[daemon] formula_v2` is disabled while a workflow is in flight.
+- [Major] The bd/native fallback story is contradictory and not executable. Claude finds the current production tree no longer has live `MolCook`/`GC_NATIVE_FORMULA` compile paths except first-party example/test surfaces, while Codex treats the referenced fallback as still supported and therefore unsafe for requires-only graph formulas. The design must choose one runtime policy: remove the stale bd row, or specify exact preflight/reject/stamp semantics for every bd-backed fallback path before durable state is written.
+- [Major] Store-query callers are not covered by a post-fetch workflow-root predicate. `internal/api/orders_feed.go` and `internal/api/convoy_sql.go` query or SQL-filter on raw `gc.kind` / `gc.formula_contract` metadata. A shared `IsWorkflowRoot` predicate cannot discover canonical-only or requires-only roots if the initial query excludes them, so the design needs canonical query criteria or a documented query-then-post-filter policy with tests.
+- [Major] The design references graph-workflow fields that do not yet exist. Claude notes `Recipe.GraphWorkflow` is named as a migration target even though `Recipe` currently has no such field. The rollout must explicitly add and populate `Recipe.GraphWorkflow` / `CompileResult.GraphWorkflow`, keep legacy metadata reads valid during the transition, and name the phase where `IsCompiledGraphWorkflow` stops reading raw root metadata.
+- [Major] The static guard and dead-code policy are too loose. Both reviews call for concrete allowlists and deletion checkpoints for raw `Contract`, `Requires.FormulaCompiler`, `gc.formula_contract`, `IsFormulaV2Enabled`, and legacy compile wrappers. Claude additionally identifies `requiresExplicitGraphContract` and `metadataRequiresGraphContract` as missing detector deletion/exemption targets; Codex adds that guards must cover function calls and metadata query construction, not just string literals.
+- [Minor] The migration table should name duplicated inline workflow-root helpers in `internal/sling/sling.go` and `internal/sling/sling_attachment.go` as delete-and-replace targets for `sourceworkflow.IsWorkflowRoot` or its successor.
+
+**Disagreements:**
+- Claude rates the fanout gap as Major; Codex rates it Blocker. Assessment: block. This is an executable caller that creates runtime beads after the root compile, so omitting it leaves a path that can bypass the core host-capability invariant.
+- Claude says the bd shell-out path is stale in current production runtime; Codex treats it as a live compatibility path because the design still references `GC_NATIVE_FORMULA=false`. Assessment: the disagreement is itself blocking evidence. The design cannot safely define alias removal or requires-only support until it states whether bd fallback is unsupported, test-only, or a real runtime path.
+- Claude asks for a `WorkflowRootQuery()`-style helper or query policy; Codex asks for static guards over metadata query construction. Assessment: both are required. Query semantics need a canonical owner, and CI should prevent new raw query construction outside that owner and explicit compatibility writers/tests.
+
+**Missing evidence:**
+- A generated or checked-in call-site inventory mapping every production use of `Compile`, `CompileWithoutRuntimeVarValidation`, `CompileExpansionFragment`, `IsCompiledGraphWorkflow`, workflow-root predicates, `gc.formula_contract`, graph-v2 detectors, and `Requires.FormulaCompiler` to a migration row or explicit allowlist.
+- A bd/native decision table covering `GC_NATIVE_FORMULA=false`, first-party example/test uses such as `examples/gastown/gastown_test.go`, external/local formulas, dual-declared formulas, requires-only formulas, and `formula_v2` true/false.
+- Tests for fanout fragment compilation with disabled host capability proving no child beads are created, plus tests proving already-created graph workflows continue while retry/on-complete/fanout compiles that create new state fail before durable writes.
+- A definition of the `Recipe.GraphWorkflow` and `CompileResult.GraphWorkflow` data shape, population point, compatibility metadata fallback, and migration phase.
+- Concrete static-guard exemptions and deletion checkpoints for legacy v2-only detectors and compatibility readers.
+
+**Required changes:**
+- Add an executable migration row for `internal/dispatch/fanout.go` and `formula.CompileExpansionFragment`. Define whether this becomes `CompileExpansionFragmentWithResult` or delegates through `CompileWithResult`, and require host-capability input, normalized requirements, shared diagnostics, graph metadata stamping, and no-partial-write tests.
+- Reconcile the bd fallback row with the current code. Either state that production formula compilation no longer shells out to bd, with any remaining examples/tests called out separately, or specify that all fallback paths preflight through `internal/formula` and reject requires-only graph formulas with a typed diagnostic before durable writes when bd cannot honor `[requires]`.
+- Add canonical workflow-root query semantics covering `internal/api/orders_feed.go`, `internal/api/convoy_sql.go`, sling/sourceworkflow callers, and dashboard-facing projections. The design must name the owner helper/API and test legacy-only, dual-stamped, graph.v2-only, and requires-only roots.
+- Add and phase the new `Recipe.GraphWorkflow` / `CompileResult.GraphWorkflow` fields, including `formula.toRecipe` population from normalized requirements and a temporary legacy metadata fallback for `graphroute.IsCompiledGraphWorkflow`.
+- Replace category-level guard language with a concrete static-guard allowlist and deletion table for `IsFormulaV2Enabled`, raw `Contract`, `Requires.FormulaCompiler`, `gc.formula_contract`, `requiresExplicitGraphContract`, `metadataRequiresGraphContract`, legacy compile wrappers, `GC_NATIVE_FORMULA=false`, and `Store.MolCook*`.
+- Name the duplicated `internal/sling` workflow-root helpers as explicit delete-and-replace call sites in the executable migration table.

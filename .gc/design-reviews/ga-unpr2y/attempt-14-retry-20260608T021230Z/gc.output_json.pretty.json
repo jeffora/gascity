@@ -1,0 +1,184 @@
+{
+  "personas": [
+    {
+      "slug": "01-mutation-boundary-auditor",
+      "wave": 1,
+      "name": "Elena Marchetti",
+      "mandate": "session lifecycle ownership, external metadata write audit, patch-map escape hatches, CI guard coverage",
+      "questions": [
+        "Which production call sites still write lifecycle or identity metadata directly, and does each backlog slice name the call sites it removes?",
+        "What failing-build guard prevents new non-session production code from applying session patch maps or SetMetadata lifecycle writes?",
+        "How are doctor, migration, repair, and test exceptions bounded so ordinary callers cannot self-label into them?"
+      ],
+      "red_flags": [
+        "production callers outside internal/session keep writing lifecycle metadata after command APIs ship",
+        "patch helpers remain reachable with no static guard",
+        "exception list grows into a permanent bypass"
+      ],
+      "questions_text": "Which production call sites still write lifecycle or identity metadata directly, and does each backlog slice name the call sites it removes?;What failing-build guard prevents new non-session production code from applying session patch maps or SetMetadata lifecycle writes?;How are doctor, migration, repair, and test exceptions bounded so ordinary callers cannot self-label into them?",
+      "red_flags_text": "production callers outside internal/session keep writing lifecycle metadata after command APIs ship;patch helpers remain reachable with no static guard;exception list grows into a permanent bypass"
+    },
+    {
+      "slug": "02-behavior-parity-guardian",
+      "wave": 1,
+      "name": "Natasha Volkov",
+      "mandate": "REQUIREMENTS scenario parity, regression prevention, characterization tests, proof freshness",
+      "questions": [
+        "Which REQUIREMENTS.md scenario rows does each extraction slice touch, and where is parity proven before the slice lands?",
+        "Are characterization tests captured before moving logic out of reconciler or manager code?",
+        "How does the plan prevent cited proof paths from going stale as implementation files change?"
+      ],
+      "red_flags": [
+        "backlog slices lack scenario-row mapping",
+        "tests assert implementation shape but not product behavior",
+        "requirements ledger is updated to fit the refactor without owner-approved behavior change"
+      ],
+      "questions_text": "Which REQUIREMENTS.md scenario rows does each extraction slice touch, and where is parity proven before the slice lands?;Are characterization tests captured before moving logic out of reconciler or manager code?;How does the plan prevent cited proof paths from going stale as implementation files change?",
+      "red_flags_text": "backlog slices lack scenario-row mapping;tests assert implementation shape but not product behavior;requirements ledger is updated to fit the refactor without owner-approved behavior change"
+    },
+    {
+      "slug": "03-decider-atomicity-enforcer",
+      "wave": 1,
+      "name": "Takeshi Yamamoto",
+      "mandate": "pure deciders, optimistic concurrency, commit-event-intent ordering, stale fact defense",
+      "questions": [
+        "Can each decider run with only immutable facts and no store, runtime, config, or clock reads?",
+        "What compare-and-swap or revalidation happens immediately before mutation commit?",
+        "When a decision returns both SessionMutation and RuntimeIntent, what is the exact commit, event emission, runtime execution, and failure ordering?"
+      ],
+      "red_flags": [
+        "decider queries store or runtime during evaluation",
+        "mutation commit is not conditional on the validated snapshot",
+        "runtime failure after durable mutation leaves no defined reconciliation or rollback path"
+      ],
+      "questions_text": "Can each decider run with only immutable facts and no store, runtime, config, or clock reads?;What compare-and-swap or revalidation happens immediately before mutation commit?;When a decision returns both SessionMutation and RuntimeIntent, what is the exact commit, event emission, runtime execution, and failure ordering?",
+      "red_flags_text": "decider queries store or runtime during evaluation;mutation commit is not conditional on the validated snapshot;runtime failure after durable mutation leaves no defined reconciliation or rollback path"
+    },
+    {
+      "slug": "04-event-delivery-contract-reviewer",
+      "wave": 1,
+      "name": "Amara Osei",
+      "mandate": "factual session events, idempotent subscribers, crash recovery, work-release guarantee",
+      "questions": [
+        "Are SessionEvent payloads facts with stable identifiers rather than commands to work, mail, trace, or extmsg?",
+        "If the process crashes after a durable session mutation but before in-process event delivery, how does a safety-critical subscriber such as work release converge?",
+        "Which reactions are critical versus best-effort, and is the recovery path documented for each?"
+      ],
+      "red_flags": [
+        "event payloads encode imperative subscriber instructions",
+        "work release depends only on observing an in-process event",
+        "payloads omit identity context needed for idempotent replay or reconciliation"
+      ],
+      "questions_text": "Are SessionEvent payloads facts with stable identifiers rather than commands to work, mail, trace, or extmsg?;If the process crashes after a durable session mutation but before in-process event delivery, how does a safety-critical subscriber such as work release converge?;Which reactions are critical versus best-effort, and is the recovery path documented for each?",
+      "red_flags_text": "event payloads encode imperative subscriber instructions;work release depends only on observing an in-process event;payloads omit identity context needed for idempotent replay or reconciliation"
+    },
+    {
+      "slug": "05-target-identity-classifier",
+      "wave": 1,
+      "name": "Amara Diallo",
+      "mandate": "target taxonomy, alias precedence, conflict cases, caller behavior preservation",
+      "questions": [
+        "Does the classifier preserve direct bead ID, live session_name, live alias, named config, template target, path alias, not-found, and ambiguous cases with one precedence order?",
+        "How are overlapping alias, config name, and template name inputs represented without misrouting?",
+        "Which API, mail, assignee, and extmsg behaviors change when classification centralizes, and which tests catch each divergence?"
+      ],
+      "red_flags": [
+        "classifier output is reinterpreted differently by caller",
+        "resolution order differs from existing target-resolution tests",
+        "historical aliases become writable live targets"
+      ],
+      "questions_text": "Does the classifier preserve direct bead ID, live session_name, live alias, named config, template target, path alias, not-found, and ambiguous cases with one precedence order?;How are overlapping alias, config name, and template name inputs represented without misrouting?;Which API, mail, assignee, and extmsg behaviors change when classification centralizes, and which tests catch each divergence?",
+      "red_flags_text": "classifier output is reinterpreted differently by caller;resolution order differs from existing target-resolution tests;historical aliases become writable live targets"
+    },
+    {
+      "slug": "06-api-cli-worker-boundary-reviewer",
+      "wave": 2,
+      "name": "Sarah Chen",
+      "mandate": "API and CLI projection, worker boundary routing, response compatibility, layering",
+      "questions": [
+        "Do API and CLI callers consume session-owned commands and projections instead of re-deriving lifecycle from raw metadata?",
+        "How does new cmd/gc production code stay on worker.Handle while session-owned commands are adopted?",
+        "What proves API response shapes and CLI output stay identical for touched scenario rows?"
+      ],
+      "red_flags": [
+        "API handlers duplicate lifecycle logic from metadata",
+        "cmd/gc imports direct session manager creation paths outside allowed exceptions",
+        "target classification changes wire or CLI output without scenario coverage"
+      ],
+      "questions_text": "Do API and CLI callers consume session-owned commands and projections instead of re-deriving lifecycle from raw metadata?;How does new cmd/gc production code stay on worker.Handle while session-owned commands are adopted?;What proves API response shapes and CLI output stay identical for touched scenario rows?",
+      "red_flags_text": "API handlers duplicate lifecycle logic from metadata;cmd/gc imports direct session manager creation paths outside allowed exceptions;target classification changes wire or CLI output without scenario coverage"
+    },
+    {
+      "slug": "07-reconciler-runtime-fact-reviewer",
+      "wave": 2,
+      "name": "Liam Okonkwo",
+      "mandate": "reconciler boundary, runtime intent adapter ownership, fact isolation, health gate split",
+      "questions": [
+        "Which wake, hold, drain, provider-health, and progress decisions move into session deciders, and which scheduling or budget responsibilities remain in the reconciler?",
+        "Are work counts, pool size, runtime liveness, and progress facts precomputed by adapters instead of queried from deciders?",
+        "Can RuntimeIntent express adapter needs without smuggling provider policy into internal/session?"
+      ],
+      "red_flags": [
+        "session deciders import reconciler helper types or bead store queries",
+        "runtime missing observations become durable session truth",
+        "wake eligibility and health gates share helper code that cannot move cleanly"
+      ],
+      "questions_text": "Which wake, hold, drain, provider-health, and progress decisions move into session deciders, and which scheduling or budget responsibilities remain in the reconciler?;Are work counts, pool size, runtime liveness, and progress facts precomputed by adapters instead of queried from deciders?;Can RuntimeIntent express adapter needs without smuggling provider policy into internal/session?",
+      "red_flags_text": "session deciders import reconciler helper types or bead store queries;runtime missing observations become durable session truth;wake eligibility and health gates share helper code that cannot move cleanly"
+    },
+    {
+      "slug": "08-migration-coexistence-strategist",
+      "wave": 2,
+      "name": "Ravi Krishnamurthy",
+      "mandate": "migration sequencing, legacy-new coexistence, rollback slices, worker-boundary collision",
+      "questions": [
+        "How does the plan sequence this extraction with the in-flight worker-boundary migration on overlapping cmd/gc and internal/api call sites?",
+        "During partial adoption, what prevents legacy patch-map callers and new command callers from split-brain writes to the same metadata fields?",
+        "Which single slice is independently shippable and revertible, and what proves it does not silently require the next slice?"
+      ],
+      "red_flags": [
+        "two half-finished boundaries collide on the same call sites",
+        "old and new writers mutate the same fields with different validation",
+        "backlog item cannot ship or roll back without a hidden flag day"
+      ],
+      "questions_text": "How does the plan sequence this extraction with the in-flight worker-boundary migration on overlapping cmd/gc and internal/api call sites?;During partial adoption, what prevents legacy patch-map callers and new command callers from split-brain writes to the same metadata fields?;Which single slice is independently shippable and revertible, and what proves it does not silently require the next slice?",
+      "red_flags_text": "two half-finished boundaries collide on the same call sites;old and new writers mutate the same fields with different validation;backlog item cannot ship or roll back without a hidden flag day"
+    },
+    {
+      "slug": "09-yagni-contract-scope-reviewer",
+      "wave": 3,
+      "name": "Kwame Asante",
+      "mandate": "minimal vocabulary, facade creep, event-log deferral, backlog scope control",
+      "questions": [
+        "Which vocabulary types are required by slice 1 target classification versus introduced only for later slices?",
+        "Does TR-007 future durable-event compatibility shape current APIs more than today's in-process events require?",
+        "What stops SessionFacts from becoming a broad facade accumulating every field any decider might want?"
+      ],
+      "red_flags": [
+        "unused vocabulary lands before any slice needs it",
+        "event payloads are contorted for speculative event sourcing",
+        "one mega SessionFacts struct replaces many operation-specific facts"
+      ],
+      "questions_text": "Which vocabulary types are required by slice 1 target classification versus introduced only for later slices?;Does TR-007 future durable-event compatibility shape current APIs more than today's in-process events require?;What stops SessionFacts from becoming a broad facade accumulating every field any decider might want?",
+      "red_flags_text": "unused vocabulary lands before any slice needs it;event payloads are contorted for speculative event sourcing;one mega SessionFacts struct replaces many operation-specific facts"
+    },
+    {
+      "slug": "10-operability-performance-diagnostics",
+      "wave": 3,
+      "name": "Ingrid Holm",
+      "mandate": "decision observability, trace and doctor diagnostics, fact read cost, event fan-out load",
+      "questions": [
+        "Can operators explain why a session was blocked, woken, drained, or closed from decider output and trace evidence alone?",
+        "What do gc trace, conflicts, and event logs show when a decision is rejected or an event is missed?",
+        "What is the reconciler cost of materializing facts and emitting subscriber events across a large city?"
+      ],
+      "red_flags": [
+        "decider results hide blocker or wake-cause details",
+        "doctor or repair flows keep writing lifecycle metadata through legacy paths",
+        "per-session fact reads or synchronous event fan-out slow hot reconciler loops"
+      ],
+      "questions_text": "Can operators explain why a session was blocked, woken, drained, or closed from decider output and trace evidence alone?;What do gc trace, conflicts, and event logs show when a decision is rejected or an event is missed?;What is the reconciler cost of materializing facts and emitting subscriber events across a large city?",
+      "red_flags_text": "decider results hide blocker or wake-cause details;doctor or repair flows keep writing lifecycle metadata through legacy paths;per-session fact reads or synchronous event fan-out slow hot reconciler loops"
+    }
+  ]
+}

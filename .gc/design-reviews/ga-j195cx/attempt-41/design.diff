@@ -1,0 +1,701 @@
+--- .gc/design-reviews/ga-j195cx/attempt-41/design-before.md	2026-05-10 22:20:15.485272850 +0000
++++ engdocs/design/formula-compiler-requirements.md	2026-05-10 23:22:03.849767478 +0000
+@@ -253,6 +253,43 @@
+ | `expand_vars` | same locations as step `expand`, plus compose expansion/map vars | compile-time expansion vars are present and affect graph materialization |
+ | Expansion/aspect contribution | `compose.expand`, `compose.map`, `compose.aspects`, transitive imports | contributed formula or template contains any construct in this registry |
+ 
++<!-- REVIEW: added per DR41-validation-registry -->
++
++Workflow-control metadata is a generated registry, not a prose-only list. The
++source of truth is `internal/formula/testdata/workflow_control_metadata.yaml`,
++and the v2-only construct registry imports it when building matrix rows:
++
++```yaml
++schema_version: 1
++keys:
++  - key: gc.scope_name
++    owner: controller
++    generated_by: [scope_step, scope_check_step]
++    min_compiler_capability: 2
++  - key: gc.scope_role
++    owner: controller
++    generated_by: [scope_step, scope_check_step, workflow_finalize_step]
++    min_compiler_capability: 2
++values:
++  gc.kind:
++    - value: scope-check
++      owner: controller
++      generated_by: [scope_check_step]
++      min_compiler_capability: 2
++    - value: retry-run
++      owner: retry
++      generated_by: [retry_step]
++      min_compiler_capability: 2
++```
++
++The registry must enumerate every workflow-control `gc.*` key and every
++generated `gc.kind` value used by scope, cleanup, retry, Ralph continuation,
++fanout, run/check, and workflow-finalize steps. CI fails when a generated
++control metadata key or value is added without a registry row, owner, generator
++name, matrix suite, and at least one positive and one missing-requirement
++fixture. Ad hoc `strings.HasPrefix("gc.")` checks are not allowed to define
++formula-v2 semantics.
++
+ `needs`, `depends_on`, `children`, `loop`, `gate`, `condition`,
+ `compose.expand`, `compose.map`, and `compose.aspects` are not v2-only by
+ themselves in this design. They require compiler v2 only when the resolved
+@@ -319,6 +356,16 @@
+     [root_file, child_body, loop_body, inline_expansion, compose_expand, compose_map, aspect, transitive_import]
+   caller_path:
+     [validate_only, show_preview, cook_root, cook_attach, sling_cli, sling_api, order_dispatch, controller_validation, fanout_fragment, convergence_create, convergence_retry, convergence_next_iteration, convoy_source_scan, dashboard_preview]
++  workflow_control_metadata_registry: internal/formula/testdata/workflow_control_metadata.yaml
++suites:
++  - id: caller-preflight
++    owner: internal/formula
++    coverage_intent: every durable writer has one fatal diagnostic row that asserts zero writes
++    row_kinds: [positive, negative, unsupported, impossible]
++    dimension_owners:
++      caller_path: internal/formula/testdata/caller_paths.yaml
++      contribution_path: internal/formula/testdata/contribution_paths.yaml
++    count_lock: 18
+ rows:
+   - id: requires-v2-host-disabled
+     input:
+@@ -371,6 +418,17 @@
+ | `caller-preflight` | validate/show previews plus every durable writer path | one fatal row per durable writer proving zero writes |
+ | `projection-parity` | CLI, API, API-routed CLI, dashboard, and Event Bus projections | golden rows for diagnostic field preservation, ordering, and count |
+ 
++Every suite row carries `row_kind`, `coverage_intent`, `dimension_owner`, and
++`zero_write_assertion` when the caller can mutate state. The generator rejects a
++durable caller row that lacks an explicit zero-write assertion for roots,
++children, hooks, dependencies, convoys, retry metadata, fanout state,
++convergence state, or workflow-root metadata. The required fixture families are:
++workflow-control metadata keys and generated `gc.kind` values; parent/child
++inheritance; expansion/aspect/import contribution conflicts; malformed,
++unsupported-future, Unicode, and NUL-containing requirement values; legacy
++`contract` and `version` edge cases; and generated control metadata produced by
++scope, retry, fanout, Ralph continuation, and workflow-finalize formulas.
++
+ The raw-shape suite is the only owner of parser-boundary behavior. Duplicate
+ TOML tables or scalar keys that the TOML library rejects remain plain parser
+ errors with no structured formula diagnostic. Valid TOML/JSON values with the
+@@ -510,6 +568,22 @@
+ trimming, semver parsing, numeric coercion, or optimistic future-range
+ acceptance is allowed in v0.
+ 
++<!-- REVIEW: added per DR41-edge-fixtures -->
++
++Fixture-level edge decisions:
++
++| Edge | Decision |
++|---|---|
++| `>=1` | accepted as default capability, source `requires`, and not a graph workflow |
++| integer boundaries | TOML integers, negative numbers, zero, and values larger than Go `int64` are wrong type or TOML parse errors; none are coerced |
++| Unicode strings | any value other than byte-exact ASCII `>=1`, `>=2`, or recognizable ASCII `>=<integer>` is invalid syntax |
++| NUL-containing strings | invalid syntax with escaped source value in diagnostics; no truncation |
++| test-only normalized requirements | `_test.go` or `internal/formula/testonly`; production constructors remain unexported |
++| glossary `schema` wording | reserved for physical file/API schema, never compiler capability |
++| dashboard remediation fields | generated from typed `FormulaDiagnostic.Remediation`, not copied from message text |
++| transitive ref collisions | PackV2 validation fails unless the lockfile resolves a single immutable revision and records the collision |
++| `safe_automatic_edit` | advisory only in v0; no command applies edits automatically |
++
+ V2-only construct registry completeness is CI-enforced. The registry fixture
+ enumerates every syntax location the decoder can produce for steps, children,
+ loop bodies, expansion templates, aspects, and imported formulas. A
+@@ -675,6 +749,51 @@
+ receives a recipe. Mutable recipe metadata is a serialization boundary only and
+ must not be used as a caller-side compiler API.
+ 
++<!-- REVIEW: added per DR41-graph-semantics -->
++
++The semantic rule is fixed: `requires.formula_compiler = ">=2"` declares that
++the formula may materialize graph-workflow topology. It is not merely a host
++provenance or diagnostic capability flag. A formula with capability `2` is
++compiled through the compiler-owned graph workflow path, and every durable
++writer must learn graph behavior from `CompileResult.GraphWorkflow`, accepted
++artifact accessors, or `internal/sourceworkflow.WorkflowRootFacts`. No other
++package may infer graph workflow semantics from raw TOML, `Recipe` metadata,
++root metadata strings, or legacy helper names.
++
++The compiler-owned generic step projections are:
++
++```go
++type SourceValue[T any] struct {
++    Value      T
++    SourcePath string
++    SourceKey  string
++    Line       int
++    Column     int
++}
++
++type CompiledStep struct {
++    ID              SourceValue[string]
++    Title           SourceValue[string]
++    Kind            SourceValue[string]
++    Retry           *CompiledRetryPolicy
++    RuntimeVars     []CompiledRuntimeVar
++    Metadata        []CompiledMetadataField
++    GraphCapability CompilerCapability
++}
++
++type CompiledRuntimeVar struct {
++    Name        SourceValue[string]
++    Required    SourceValue[bool]
++    Default     SourceValue[string]
++    Description SourceValue[string]
++}
++```
++
++These projections are read-only compiler output. `Recipe.GraphWorkflow`,
++`internal/sourceworkflow`, convergence, fanout, API globals, and molecule
++instantiation code consume them or the accepted artifact; they do not keep a
++parallel graph-contract subset parser.
++
+ Workflow-root query authority is split deliberately and has one persistence
+ owner:
+ 
+@@ -697,13 +816,18 @@
+ )
+ 
+ type WorkflowRootFacts struct {
+-    Kind                WorkflowRootCapabilityKind
+-    FormulaName         string
+-    CompilerCapability  int
+-    Requirement         string
+-    RequirementSource   string
+-    ArtifactRef         string
+-    Diagnostics         []formula.Diagnostic
++    Kind                      WorkflowRootCapabilityKind
++    FormulaName               string
++    CompilerCapability        int
++    Requirement               string
++    RequirementSource         string
++    RequirementsSchemaVersion int
++    AcceptedArtifactVersion   int
++    MinimumReaderCapability   int
++    FutureAxes                []string
++    UnsupportedAxes           []string
++    ArtifactRef               string
++    Diagnostics               []formula.Diagnostic
+ }
+ 
+ func WorkflowRootFacts(metadata map[string]string) WorkflowRootFacts
+@@ -730,6 +854,27 @@
+ operator cleanup, and refuse to perform graph-specific child, fanout,
+ continuation, retry, or new-compile behavior they do not understand.
+ 
++<!-- REVIEW: added per DR41-old-reader-contract -->
++
++Every new workflow root carries a v0-readable durable requirements contract in
++metadata even when the full accepted artifact is stored elsewhere:
++
++| Metadata key | Meaning |
++|---|---|
++| `gc.formula_requirements_schema_version` | integer schema version for formula requirement root metadata; v0 writes `1` |
++| `gc.formula_accepted_artifact_version` | accepted artifact serialization version used for this root |
++| `gc.formula_min_reader_capability` | minimum formula compiler capability an old binary must understand before graph-specific writes are allowed |
++| `gc.formula_requirement_axes` | comma-separated axis manifest, for example `formula_compiler` |
++| `gc.formula_unsupported_axes` | comma-separated axes seen but not understood by this reader |
++
++Old binaries do not need to parse future axis semantics to stay safe. If the
++schema version, accepted artifact version, minimum reader capability, compiler
++capability, or axis manifest exceeds what the binary understands, typed facts
++classify the root as `unknown_future_capability_workflow`. Observation,
++read-only API/dashboard projection, and cleanup that does not synthesize graph
++semantics may continue; retry, fanout, continuation, missing-child repair,
++child creation, `on_complete`, and any new compile fail closed before writes.
++
+ The query helper must expose typed criteria for all persistence scans that
+ currently need workflow roots: any workflow root, graph workflow roots,
+ canonical-only roots, legacy-only roots during the alias window, and roots that
+@@ -759,11 +904,16 @@
+ | `cmd/gc/cmd_sling.go` and `internal/sling` routing helpers | Graph routing and workflow attachment can branch on `gc.formula_contract` | Use shared workflow-root predicates backed by normalized metadata |
+ | `cmd/gc/cmd_order.go` and `cmd/gc/order_dispatch.go` | Order wisps can emit divergent errors | Preflight and accept a compile artifact; emit the shared diagnostic event on failure |
+ | `cmd/gc` helpers that shell out to `bd` or legacy formula probes | Shell-out output can bypass typed compiler diagnostics and durable preflight | Treat shell-outs as validation-only probes; no shell-out result may authorize root, child, hook, convoy, retry, or fanout writes |
++| Retry and `on_complete` continuation launchers | Continuations can compile formulas after a root already exists | Use the parent host snapshot or current host snapshot as specified by the entry point and accept the target artifact before retry-run or continuation metadata writes |
++| Ralph continuation and workflow-control steps | Generated control metadata can imply graph behavior without a compiler-owned result | Generate control metadata only from accepted artifacts and registered workflow-control metadata rows |
+ | `internal/dispatch/fanout.go` and fanout expansion fragments | Runtime fragment compilation can happen after a durable root exists | Compile each fragment through `CompileWithResult` before fanout writes any child, convoy, or continuation metadata |
++| `molecule.Instantiate` and fragment instantiation helpers | Generic instantiation can stamp roots or children from a raw `Recipe` | Require an accepted artifact or accepted fragment wrapper for every root, child, dependency, and hook write |
+ | `cmd/gc/cmd_convoy_dispatch.go` and convoy cleanup | Graph-only roots can be discovered by legacy metadata only | Use shared workflow-root predicate that accepts new and legacy metadata during migration |
+ | `internal/api` workflow-root read models | Duplicate predicates can diverge from CLI/sourceworkflow scans | Use `internal/sourceworkflow.WorkflowRootQuery` and typed facts for every workflow-root API projection |
++| `internal/api` global formula/order/control projections | API globals can reassemble graph state from root metadata | Project compiler requirement, graph kind, and diagnostics from typed facts only |
+ | `internal/api/handler_sling.go`, formula endpoints, order feeds, and convoy projections | HTTP status and dashboard-facing errors can diverge | Project `Diagnostic` without hand-written JSON or string parsing |
+ | `internal/convergence` create/retry/next iteration | Subset validation can drift from full compiler semantics or reuse stale artifacts | Accept a compiler artifact, project typed convergence fields, and reuse only persisted artifacts whose identity matches the existing root |
++| Legacy graph-contract helpers | Helpers can preserve alternate `graph.v2` authority after callers migrate | Delete or reduce to parser/metadata compatibility shims covered by the raw-consumer allowlist |
+ | Dashboard generated types | UI can infer graph state from legacy metadata | Use API-projected typed fields and diagnostics |
+ 
+ <!-- REVIEW: added per caller-migration-executable -->
+@@ -781,7 +931,9 @@
+ | `cmd/gc/cmd_sling.go` graph decoration | Use accepted artifact provenance and canonical workflow-root metadata before route decoration | Existing graph sling tests updated to assert canonical metadata and no raw-contract branch |
+ | `cmd/gc/cmd_order.go` and `cmd/gc/order_dispatch.go` formula order cook | Preflight and accept artifact; emit one registered failure event on fatal diagnostics; continue later orders | Order tests for unsatisfied host, deprecation warning suppression, and successful later order |
+ | `cmd/gc` or internal helpers invoking `bd` for formula behavior | Remove from runtime authorization path; keep only explicit release-validation probes with typed native parity | static guard fails on durable writer paths that consume shell-out output; probe tests are non-interactive and validation-only |
++| retry, `on_complete`, Ralph continuation, and workflow-control generated steps | `CompileWithResult` -> `AcceptCompileResult` before retry-run, continuation, or generated-control metadata writes | continuation tests prove disabled host writes no retry-run bead, hook, or continuation metadata |
+ | `internal/dispatch/fanout.go`: `CompileExpansionFragment` and any continuation fanout helper | Accept a parent artifact and compile/accept fragment formulas through the same host snapshot before durable fanout writes | Fanout tests prove disabled host capability creates zero child beads, convoys, continuation beads, or metadata |
++| `internal/molecule.Instantiate` and fragment instantiation helpers | Accepted root/fragment wrappers that embed `AcceptedCompileArtifact` | instantiate tests prove raw `Recipe` and caller-built metadata cannot authorize root, child, dependency, or hook writes |
+ | `cmd/gc/cmd_convoy_dispatch.go` source-workflow scans | Use `internal/sourceworkflow.IsWorkflowRoot` backed by canonical metadata first, legacy fallback second | Convoy tests with canonical-only, legacy-only, dual-stamped, and mixed-store roots |
+ | `internal/sourceworkflow.IsWorkflowRoot` and `ListLiveRoots` | Keep `internal/sourceworkflow` as the sole persistence predicate that calls formula metadata helpers | Predicate parity tests shared by sling, convoy, API, and dispatch |
+ | `internal/graphroute.IsCompiledGraphWorkflow` | Read `Recipe.GraphWorkflow` or `CompileResult.GraphWorkflow`, not root metadata strings | Graph route tests prove metadata changes do not affect compiled result semantics |
+@@ -803,8 +955,10 @@
+ targeted searches for `CompileWithoutRuntimeVarValidation`,
+ `CompileExpansionFragment`, `SetFormulaV2Enabled`, `IsFormulaV2Enabled`,
+ `gc.formula_contract`, `contract = "graph.v2"`, `ValidateForConvergence`,
+-`molecule.Cook`, `molecule.Attach`, `GraphWorkflow`, `gc.fanout_state`,
+-`exec.Command("bd"`, and workflow-root metadata filters. Each row names the
++`molecule.Cook`, `molecule.Attach`, `molecule.Instantiate`, `GraphWorkflow`,
++`gc.fanout_state`, `gc.continuation_group`, `gc.kind`, `exec.Command("bd"`,
++API formula/global projections, legacy graph-contract helpers, and
++workflow-root metadata filters. Each row names the
+ owner package, current helper, durable-write
+ ability, migration target, and blocking test. At minimum it contains these
+ rows:
+@@ -818,9 +972,13 @@
+ | graph attachment predicate | `internal/sling.IsGraphWorkflowAttachment` | reads durable metadata | shared `internal/sourceworkflow` predicate parity test |
+ | order cook | `cmd/gc/cmd_order.go`, `cmd/gc/order_dispatch.go` | yes | grouped event and successful-later-order tests |
+ | durable shell-out bridge | any `bd` or legacy formula probe invocation reachable from launch/order/fanout/convergence | yes if it authorizes writes | validation-only probe or deletion plus static guard |
++| retry and on-complete continuation | retry/on-complete helpers and generated continuation metadata writers | yes | accepted-artifact continuation zero-write tests |
++| Ralph/control continuation | Ralph continuation and generated `gc.kind` control writers | yes | workflow-control registry and generated metadata tests |
+ | fanout fragment | `internal/formula.CompileExpansionFragment`, `internal/dispatch/fanout.go` | yes | compile all fragments before first fragment write |
++| molecule instantiate | `internal/molecule.Instantiate` and fragment instantiation helpers | yes | accepted-artifact instantiate tests |
+ | convergence subset | `internal/convergence/formula.go:ValidateForConvergence` and create/retry callers | yes | projection and artifact-reuse tests |
+ | API sling/formulas | `internal/api/handler_sling.go`, `handler_formulas.go` | launch yes, preview no | typed Huma diagnostic and OpenAPI in-sync tests |
++| API globals and graph helpers | API global projection helpers and legacy graph-contract helpers | reads durable metadata | typed facts projection tests and static guard |
+ | API workflow roots | `internal/api/orders_feed.go`, `handler_convoy_dispatch.go`, workflow-root read models | reads durable metadata | shared predicate static guard and projection fixtures |
+ | convoy/source workflow | `cmd/gc/cmd_convoy_dispatch.go` | reads durable metadata | canonical-only/legacy-only/dual-stamped selector test |
+ | dashboard state | generated TS and dashboard panels | no direct write | generated-client compile and no-metadata-inference tests |
+@@ -862,6 +1020,12 @@
+ that proves the read is parser, compatibility-writer, or shared-predicate
+ logic. The allowlist is report-only only in rollout phase 1; it becomes
+ blocking before any durable producer switches to accepted compile artifacts.
++From phase 3a onward, once `CompileResult`, `AcceptedCompileArtifact`, and the
++shared workflow-root predicate exist, the guard blocks new production raw
++consumers. Existing consumers may remain only in the checked allowlist, and each
++allowlist row must name an owner, expiry phase, and replacement test. Every
++later caller sub-phase must remove or narrow at least the rows it owns before it
++can be considered complete.
+ 
+ Durable writer APIs must make the accepted compile identity impossible to
+ skip. New or modified APIs that can write roots, children, wisps, dependencies,
+@@ -1119,10 +1283,16 @@
+ 1. Every first-party pack, example, test fixture, and tutorial has shipped with
+    `[requires]` for at least two minor releases.
+ 2. `gc formula validate --all-packs --legacy-contract-report` reports zero
+-   first-party legacy-only formulas.
+-3. The release checklist records that externally pinned legacy formulas remain
+-   supported by either the alias or a documented compatibility branch.
+-4. CI's stale-guidance check rejects new docs that teach `contract` as the
++   first-party `legacy_only` formulas and zero first-party `dual_declared`
++   formulas.
++3. `docs/release/formula-compiler-external-support.md` has no active support
++   row that still requires parser alias support for an externally pinned pack,
++   branch, tag, SHA, registry source, local path, transitive import, or shadowed
++   formula.
++4. The compatibility artifact records exact versions or SHAs for every old
++   reader in the supported set and proves those readers either no longer need
++   alias parsing or are outside support.
++5. CI's stale-guidance check rejects new docs that teach `contract` as the
+    canonical surface.
+ 
+ <!-- REVIEW: added per migration-gates-measurable -->
+@@ -1146,7 +1316,7 @@
+ 
+ | Report or fixture | Must cover | Blocks |
+ |---|---|---|
+-| `--legacy-contract-report` | legacy-only, dual-declared, requires-only, empty `[requires]`, invalid `contract`, and source path/provenance | first-party requires-only conversion while first-party legacy-only rows remain |
++| `--legacy-contract-report` | legacy-only, dual-declared, requires-only, empty `[requires]`, invalid `contract`, and source path/provenance | first-party requires-only conversion while first-party legacy-only rows remain; alias removal while first-party legacy-only or dual-declared rows remain |
+ | `--legacy-version-report` | `version` omitted, `1`, `2`, string, wrong type, and coexistence with v2-only constructs | diagnostics rollout when `version` still implies compiler behavior anywhere |
+ | inherited requirement conflict fixture | parent raises to `>=2`, child attempts default or `>=1`, expansion/aspect raises beyond root | caller migration when conflicts do not produce deterministic source-attributed diagnostics |
+ | first-party dual-declaration guard | built-in packs, examples, tutorials, and test fixtures during alias window | release when a first-party graph formula drops `contract` before the floor allows it |
+@@ -1170,10 +1340,31 @@
+ Each item records formula name, source path, pack binding, import source, ref,
+ locked revision or local hash, requirement source, and whether the formula is
+ first-party or external. Exit code `0` means no first-party legacy-only formulas
+-were found; exit code `2` means first-party legacy-only formulas remain; exit
+-code `1` is reserved for I/O or malformed-formula failures. The minimum binary
+-floor is recorded in the release checklist and `docs/reference/config.md` before
+-any first-party requires-only conversion lands.
++were found; exit code `2` means first-party legacy-only formulas remain, and
++the alias-removal subcommand treats first-party `dual_declared > 0` as the same
++blocking release-gate failure. Exit code `1` is reserved for I/O or
++malformed-formula failures. The minimum binary floor is recorded in the release
++checklist and `docs/reference/config.md` before any first-party requires-only
++conversion lands.
++
++<!-- REVIEW: added per DR41-alias-visibility -->
++
++Accepted legacy-alias compiles are visible by policy, not by caller discretion:
++
++| Surface | Legacy-alias visibility during alias window |
++|---|---|
++| `gc formula validate`, `show`, and API preview | return `formula.contract_deprecated` with source path/key/value every time the source is inspected |
++| `gc sling --formula` and API sling | accept through the native compiler, attach the warning to the compile result/artifact, and suppress repeated operator display by `OnceKey` |
++| order dispatch | record one grouped producer-local warning per `(order id, formula, OnceKey, config generation)`; do not emit Event Bus warning payloads |
++| convergence create/retry/speculative wisp | persist the warning in the accepted artifact and expose it in convergence preview/status surfaces |
++| fanout fragments and `on_complete` formulas | persist warnings for parent and fragment artifacts separately so fragment-only legacy use is not hidden |
++| retry/Ralph continuation/controller validation | attach warnings to the accepted artifact or validation result and include them in release reports |
++| dashboard/API read models | project the warning only from typed diagnostics or accepted artifact metadata; never infer it from raw `gc.formula_contract` |
++| release validation | include legacy-only, dual-declared, requires-only, external, shadowed, and background-accepted alias counts in the saved report |
++
++This visibility policy is required evidence for alias removal. A background
++legacy alias compile that is accepted but not surfaced in one of the rows above
++keeps the alias window open.
+ 
+ Old-reader and native-vs-`bd` parity are exercised by a pinned corpus under
+ `internal/formula/testdata/compat_corpus/`. The corpus contains at least these
+@@ -1302,7 +1493,7 @@
+ 
+ | Gate | Artifact | Blocks |
+ |---|---|---|
+-| Legacy inventory | `gc formula validate --all-packs --legacy-contract-report --json` saved in release artifacts | first-party requires-only conversion while `legacy_only > 0` |
++| Legacy inventory | `gc formula validate --all-packs --legacy-contract-report --json` saved in release artifacts | first-party requires-only conversion while `legacy_only > 0`; alias removal while first-party `legacy_only > 0` or `dual_declared > 0` |
+ | Provenance inventory | `gc formula validate --all-packs --provenance --json` | source conversion when any first-party graph formula lacks pack binding, locked revision, or content hash |
+ | Minimum binary floor | `docs/release/formula-compiler-min-floor.json` plus release-note entry | publishing requires-only first-party packs |
+ | External pinned-pack plan | release checklist entry naming alias support, compatibility branch, or LTS binary | removing `contract` alias |
+@@ -1354,8 +1545,12 @@
+ stop accepting legacy `contract` only after the enforced minimum binary floor
+ artifact says all supported readers understand canonical `[requires]`, the
+ configured dual-declared compatibility window has elapsed, the external plan
+-expires, and the legacy inventory gate has reported zero first-party
+-legacy-only formulas for two consecutive minor releases.
++expires, the old-reader artifact names exact supported binary versions or SHAs,
++the legacy inventory gate has reported zero first-party `legacy_only` and zero
++first-party `dual_declared` formulas for two consecutive minor releases, and no
++background validation, order, convergence, fanout, retry, controller, API, or
++dashboard report contains an accepted alias compile in the latest release
++candidate.
+ 
+ ## Host Capability And Diagnostics
+ 
+@@ -1407,6 +1602,12 @@
+ 
+ <!-- REVIEW: added per DR33-diagnostics-policy -->
+ 
++- Fatal and warning grouping keys are canonical. Warning `OnceKey` is
++  `<code>|<source_path>|<source_key>|<source_value>|<normalized_requirement>`.
++  Fatal `OnceKey` is
++  `<code>|<source_path>|<source_key>|<source_value>|<normalized_requirement>|<host_capability>`.
++  Background grouping adds `(producer, subject id, config generation)` around
++  that key; it never changes the diagnostic key itself.
+ - Warning diagnostics do not publish Event Bus events. They are returned on
+   synchronous CLI/API/dashboard validation surfaces and may be counted in
+   producer-local state, but `formula.contract_deprecated` and
+@@ -1424,6 +1625,12 @@
+   `(code, source path, source key)` per command invocation. Fatal diagnostics
+   exit non-zero and include the code, source path, offending value, normalized
+   requirement, host capability, and remediation.
++- `formula.compiler_requirement_unsatisfied` preserves both attributions: the
++  formula requirement source (`requires.formula_compiler` or legacy `contract`)
++  and the host gate source (`city.toml:[daemon].formula_v2`). The primary
++  source fields point to the host gate because that is the operator action, and
++  the requirement source fields remain present so API, dashboard, and release
++  reports can identify which formula requirement was unsatisfied.
+ - API endpoints return typed diagnostic fields in Huma-registered response
+   bodies. User-correctable formula input errors use HTTP 400; internal I/O
+   failures remain HTTP 500.
+@@ -1448,12 +1655,12 @@
+ - Event payloads for compile failures are typed and registered in
+   `events.KnownEventTypes`. Payload fields include `code`, `severity`,
+   `formula`, `source_path`, `source_key`, `source_value`,
++  `requirement_source_path`, `requirement_source_key`,
++  `requirement_source_value`, `host_source_path`, `host_source_key`,
+   `normalized_requirement`, `host_capability`, `message`, `remediation`, and
+   `once_key`. No event path may hand-write JSON or project diagnostics through
+   `map[string]any`.
+-- `OnceKey` shape is
+-  `<code>|<source_path>|<source_key>|<source_value>|<host_capability>`. CLI
+-  suppression is per process invocation. Background suppression is an
++- CLI suppression is per process invocation. Background suppression is an
+   in-memory LRU per city and producer, capped at 4096 keys with oldest-entry
+   eviction, reset on process restart and config reload. Warning diagnostics are
+   suppressed by `OnceKey`; fatal diagnostics in background loops are grouped by
+@@ -1476,6 +1683,11 @@
+     SourcePath            string `json:"source_path,omitempty"`
+     SourceKey             string `json:"source_key,omitempty"`
+     SourceValue           string `json:"source_value,omitempty"`
++    RequirementSourcePath string `json:"requirement_source_path,omitempty"`
++    RequirementSourceKey  string `json:"requirement_source_key,omitempty"`
++    RequirementSourceValue string `json:"requirement_source_value,omitempty"`
++    HostSourcePath        string `json:"host_source_path,omitempty"`
++    HostSourceKey         string `json:"host_source_key,omitempty"`
+     NormalizedRequirement string `json:"normalized_requirement,omitempty"`
+     HostCapability        string `json:"host_capability,omitempty"`
+     Message               string `json:"message"`
+@@ -1505,7 +1717,7 @@
+ 
+ | Surface | Required projection | Parity tests |
+ |---|---|---|
+-| Direct CLI (`gc formula`, `gc sling`, `gc order`) | Prints the canonical diagnostic code, source path, source key/value, normalized requirement, host capability, and remediation | direct CLI golden stderr and exit-code tests |
++| Direct CLI (`gc formula`, `gc sling`, `gc order`) | Prints the canonical diagnostic code, primary source, requirement source when distinct, host source when distinct, normalized requirement, host capability, and remediation | direct CLI golden stderr and exit-code tests |
+ | API-routed CLI | Forwards the typed Huma diagnostic without rewriting code, message, remediation, or source attribution | same formula fixture through direct and API-routed CLI produces byte-normalized diagnostics |
+ | Huma HTTP endpoints | Use typed response structs with `diagnostics []FormulaDiagnostic`; no `map[string]any`, `json.RawMessage`, or hand-written JSON | OpenAPI in-sync and generated-client compile tests |
+ | Generated TS client and dashboard | Render the generated diagnostic fields; never infer graph state or remediation from metadata strings | dashboard state tests using generated fixtures |
+@@ -1556,6 +1768,11 @@
+       severity: error
+       source_path: city.toml
+       source_key: daemon.formula_v2
++      requirement_source_path: formulas/graph.toml
++      requirement_source_key: requires.formula_compiler
++      requirement_source_value: ">=2"
++      host_source_path: city.toml
++      host_source_key: daemon.formula_v2
+       normalized_requirement: ">=2"
+       host_capability: "1"
+       remediation: enable [daemon] formula_v2 or choose a v1 formula
+@@ -1565,17 +1782,18 @@
+   api_status_launch: 409
+   event_constants: [order.formula_compile_failed]
+   dashboard_group:
+-    key: formula.compiler_requirement_unsatisfied|formulas/graph.toml|daemon.formula_v2|1
++    key: formula.compiler_requirement_unsatisfied|city.toml|daemon.formula_v2|false|>=2|1
+     title: Formula compiler requirement unsatisfied
+     occurrence_count: 1
+ ```
+ 
+ The golden tests compare direct CLI, API-routed CLI, Huma response bodies,
+ generated TypeScript fixtures, dashboard rendering state, and event payloads.
+-Every projection must preserve `Code`, canonical message, remediation,
+-source path/key/value, normalized requirement, host capability, severity, and
+-`OnceKey`. Surfaces may add local context such as HTTP status or producer id,
+-but they may not rewrite or drop formula diagnostic fields.
++Every projection must preserve `Code`, canonical message, remediation, primary
++source path/key/value, requirement source fields, host source fields, normalized
++requirement, host capability, severity, and `OnceKey`. Surfaces may add local
++context such as HTTP status or producer id, but they may not rewrite or drop
++formula diagnostic fields.
+ 
+ Dashboard-visible grouped failure state is explicit. Background producer
+ failures appear as grouped rows keyed by diagnostic `OnceKey`, producer,
+@@ -1599,6 +1817,16 @@
+ | `gc.formula_compiler_capability` | `2` | Canonical |
+ | `gc.formula_contract` | `graph.v2` | Deprecated compatibility stamp |
+ 
++Future-readable root metadata:
++
++| Metadata key | Value |
++|---|---|
++| `gc.formula_requirements_schema_version` | `1` for this v0 root metadata schema |
++| `gc.formula_accepted_artifact_version` | accepted artifact serialization version |
++| `gc.formula_min_reader_capability` | minimum compiler capability required before graph-specific old-reader writes |
++| `gc.formula_requirement_axes` | comma-separated manifest such as `formula_compiler` |
++| `gc.formula_unsupported_axes` | present only when a reader projected unknown axes for visibility |
++
+ Auditable provenance for every new workflow root:
+ 
+ | Metadata key | Value |
+@@ -1729,6 +1957,51 @@
+ compiler requirement without the corresponding pack-floor and docs/release
+ artifact updates.
+ 
++<!-- REVIEW: added per DR41-packv2-lockfile -->
++
++PackV2 lockfile semantics are owned by `internal/packv2/lockfile.go` and the
++schema at `docs/schema/pack-lockfile.v1.json`. The lockfile is the only source
++of `LockedRevision` for remote refs and transitive imports:
++
++```toml
++schema_version = 1
++
++[[packs]]
++name = "acme-workflows"
++source = "https://example.com/acme.git"
++requested_ref = "main"
++locked_revision = "sha256-or-git-sha"
++content_hash = "sha256:..."
++requires_gc = ">=0.x"
++reproducibility = "pinned"
++
++[[packs.imports]]
++parent = "acme-workflows"
++source = "https://example.com/shared.git"
++requested_ref = "v1.4.0"
++locked_revision = "git-sha"
++content_hash = "sha256:..."
++```
++
++Validation input contracts are fixed:
++
++| Input | Required behavior |
++|---|---|
++| `--pack-source <url> --ref <sha>` with no lockfile | reproducible only when `<sha>` is immutable and content hash is recorded in the report |
++| `--pack-source <url> --ref <branch-or-tag>` with no lockfile | `local-not-reproducibly-pinned` or remote non-reproducible diagnostic; not acceptable for release gates |
++| `--pack-path <local>` inside clean VCS | `local-clean` with VCS revision and content hash; release gate needs explicit approval |
++| `--pack-path <local>` dirty or outside VCS | warning or failure according to gate; never treated as pinned |
++| direct import with lock entry | use the lock entry's `locked_revision` and content hash before formula selection |
++| transitive import without lock entry | non-reproducible diagnostic that names the parent import chain |
++| conflicting transitive refs for the same source | fail validation unless the lockfile has a single resolved revision and both parents record the collision |
++
++`--requirement-diff old.lock new.lock` compares lockfile entries by pack name,
++source, requested ref, locked revision, content hash, `requires_gc`, and every
++formula requirement delta. Branch or tag refs are mutable unless a lock entry
++pins their resolved revision. Registry sources follow the same rule: a semver
++constraint is not reproducible until the lockfile records the resolved immutable
++revision and content hash.
++
+ New producers must write the canonical keys. During the alias window they also
+ write `gc.formula_contract = "graph.v2"` for graph workflow roots so existing
+ readers continue to work. New consumers must use a shared predicate that reads
+@@ -1806,6 +2079,14 @@
+ are versioned by `schema_version`; external pack tooling must not parse
+ human-readable diagnostic messages.
+ 
++`safe_automatic_edit` is advisory in v0. Gas City does not apply migration edits
++automatically and no validation command rewrites source files. A value of
++`true` means the hint's replacement is local to one formula file, preserves
++comments according to the TOML writer fixture, and can be offered by external
++tooling; it is not permission for the SDK to modify third-party packs. Any
++future `--apply` command needs a separate design with backups, dry-run output,
++conflict detection, and author confirmation rules.
++
+ Operational meaning of reproducibility values:
+ 
+ | Value | Meaning | Policy effect |
+@@ -2001,21 +2282,26 @@
+ Rollout is split so `main` can stay green and each phase has a narrow rollback.
+ 
+ 1. Parser and model: add `Requires`, `NormalizedRequirements`, diagnostics, and
+-   validation tests. Keep existing callers on current behavior.
++   validation tests. Keep existing callers on current behavior and keep the
++   no-raw-consumer guard report-only.
+ 2. Compile result and acceptance: add `CompileResult`,
+    `AcceptedCompileArtifact`, canonical metadata keys, dual-stamping, and the
+-   shared workflow-root predicate. Existing legacy consumers still work through
+-   the fallback.
++   shared workflow-root predicate. The docs/example/generated-help bundle for
++   any diagnostic that can become visible in later phases lands here, before
++   that diagnostic is exposed to operators.
+ 3. Caller migration: move callers to the normalized result in reversible
+-   sub-phases. The static no-raw-consumer guard starts in report-only mode and
+-   becomes blocking only after the final caller sub-phase lands.
++   sub-phases. At phase 3a the static no-raw-consumer guard becomes blocking
++   for new production raw consumers; existing consumers remain only on the
++   owned expiring allowlist and each later sub-phase shrinks its rows.
+ 4. Compatibility bridge: keep first-party graph formulas dual-declared while
+-   any supported production path can still shell out to a compiler that only
+-   understands `contract`.
+-5. Docs and examples: after parser and caller support ships, update
+-   `docs/reference/formula.md`, architecture docs, tutorials, examples,
+-   testdata, config references, and generated CLI docs to teach `[requires]` as
+-   canonical. Legacy `contract` appears only in migration notes.
++   any supported release-validation probe can still read only `contract`.
++   Production runtime paths remain native-only and may not fall back to `bd` or
++   `GC_NATIVE_FORMULA=false`.
++5. Docs and examples completion: stale live docs, generated CLI/config docs,
++   architecture docs, PackV2 author docs, tutorials, examples, testdata, and
++   dashboard/API generated types are refreshed before each matching
++   user-visible diagnostic surface is enabled. Legacy `contract` appears only
++   in migration notes.
+ 6. Pack-floor enforcement: land resolver/import enforcement for `[pack]
+    requires_gc`, seed the compatibility/minimum-floor/external-support
+    artifacts, and prove incompatible packs are rejected before formula
+@@ -2030,9 +2316,15 @@
+ 
+ - Phases 1 and 2 are additive and can be reverted without changing formula
+   source files.
+-- Phase 3 can fall back to legacy predicates because roots are dual-stamped.
++- Phase 3 rollback disables the newly migrated producer or surface before it
++  writes durable state. It does not reauthorize raw consumers that were not on
++  the owned allowlist at the start of the sub-phase.
+ - Phase 4 keeps dual source declarations, so old binaries still read built-in
+   graph formulas.
++- Rollback after user-visible diagnostics ship is to restore dual declarations,
++  dual root stamps, or disable the new producer path before writes; it is not to
++  revive the old `bd` shell-out runtime path or reinterpret requires-only
++  formulas in old binaries.
+ - Phases 7 and 8 require an explicit release decision because they can affect
+   externally pinned packs.
+ 
+@@ -2040,14 +2332,13 @@
+ 
+ | Sub-phase | Scope | Required gate | Rollback |
+ |---|---|---|---|
+-| 3a shared result plumbing | `CompileResult`, `AcceptedCompileArtifact`, typed diagnostics, metadata writer, workflow-root predicate | formula unit tests and predicate parity tests | callers still use legacy compile wrapper until durable writers switch |
+-| 3b sling and CLI launch | `gc sling`, `internal/sling`, force replacement, runtime-var validation | enabled/disabled host tests and no-partial-root tests | fall back to dual-stamped legacy predicate |
++| 3a shared result plumbing | `CompileResult`, `AcceptedCompileArtifact`, typed diagnostics, metadata writer, workflow-root predicate, blocking no-new-raw-consumer guard | formula unit tests, predicate parity tests, allowlist seeded with owner/expiry/test rows | callers still use legacy compile wrapper until durable writers switch; new raw consumers stay blocked |
++| 3b sling and CLI launch | `gc sling`, `internal/sling`, force replacement, runtime-var validation | enabled/disabled host tests and no-partial-root tests | disable the migrated launch path before writes while existing dual-stamped roots remain readable through the shared predicate |
+ | 3c orders and controller scans | formula-backed order dispatch and controller validation producers | repeated scan grouping test and successful-later-order test | disable new producer event while keeping synchronous diagnostics |
+-| 3d API and generated clients | Huma handlers, OpenAPI, generated dashboard TS | `make dashboard-check` and OpenAPI in-sync | keep legacy HTTP error projection behind a feature flag |
+-| 3e convoy/source workflow | source-workflow scans, convoy dispatch and cleanup | canonical-only, legacy-only, dual-stamped, mixed-store root tests | legacy fallback remains in shared predicate |
++| 3d API and generated clients | Huma handlers, OpenAPI, generated dashboard TS | docs/generated-client bundle already landed, `make dashboard-check`, and OpenAPI in-sync | disable the new API launch/preview surface before writes; no hand-written legacy JSON projection |
++| 3e convoy/source workflow | source-workflow scans, convoy dispatch and cleanup | canonical-only, legacy-only, dual-stamped, mixed-store root tests | keep the legacy metadata branch only inside the shared predicate during the alias window |
+ | 3f convergence and molecule execution | convergence create/retry/speculative wisp, molecule cook/cook-on, fanout fragments | zero-write tests for every durable write boundary | reject new convergence/fanout formulas while legacy roots continue |
+ | 3g dashboard rendering | dashboard state and generated diagnostic rendering | generated TS compile and dashboard state tests | dashboard hides diagnostics but API remains typed |
+-| 3h blocking static guard | production raw-consumer denylist becomes CI-blocking | repo-wide guard has only named exemptions | revert guard to report-only |
+ 
+ Documentation and source conversion are separate gates:
+ 
+@@ -2058,6 +2349,16 @@
+ | First-party dual declarations | built-in packs, examples, testdata, and fixtures carry both `contract` and `[requires]` |
+ | First-party requires-only conversion | only after minimum binary floor, external support plan, and `bd` probe retirement/parity gates pass |
+ 
++Diagnostic visibility matrix:
++
++| Surface becomes visible in | Required predecessor |
++|---|---|
++| CLI stderr or generated help | `docs/reference/formula.md`, `docs/reference/cli.md`, command help, examples, and stale-guidance checks |
++| Huma API or API-routed CLI | typed response structs, OpenAPI in-sync, generated TS, dashboard fixture, and reference docs |
++| dashboard state | generated API types, dashboard remediation field fixtures, and no-metadata-inference tests |
++| order/controller/convergence events | registered typed event payloads, repeated-loop grouping fixtures, and operator docs |
++| release validation reports | PackV2 author docs, lockfile schema, requirement-diff docs, and saved artifact schemas |
++
+ ## In-Flight And Convergence Behavior
+ 
+ <!-- REVIEW: added per in-flight-convergence-behavior -->
+@@ -2119,7 +2420,10 @@
+ 
+ <!-- REVIEW: added per convergence-boundary -->
+ 
+-`internal/convergence` owns the projection API:
++`internal/convergence/formula_projection.go` owns the projection API and
++`internal/convergence/projection_validate.go` owns convergence-domain
++validation. No other convergence file may decode formula TOML or own
++source-field meanings.
+ 
+ ```go
+ type SourceValue[T any] struct {
+@@ -2157,6 +2461,22 @@
+ func ValidateProjection(meta ConvergenceMetadata) []formula.Diagnostic
+ ```
+ 
++`ValidateProjection` emits only these convergence-domain diagnostic codes:
++
++| Code | Meaning |
++|---|---|
++| `convergence.formula_disabled` | convergence metadata explicitly disables convergence for the selected formula |
++| `convergence.evaluate_prompt_missing` | convergence is enabled but no evaluate prompt or prompt path was projected |
++| `convergence.evaluate_prompt_unreadable` | projected prompt path cannot be read before durable writes |
++| `convergence.required_var_missing` | required convergence runtime var has no value |
++| `convergence.retry_policy_invalid` | projected retry policy cannot support convergence iteration |
++| `convergence.reserved_step_conflict` | formula step IDs collide with convergence-reserved step IDs |
++| `convergence.relevant_step_missing` | no source-attributed step can own convergence output |
++
++These diagnostics are separate from formula requirement diagnostics. They run
++only after formula acceptance and must include source path/key/value from the
++projection; they never reinterpret raw requirement fields.
++
+ `ProjectFormula` may report convergence-domain diagnostics such as a missing
+ evaluate prompt for preview paths, but it may not reinterpret raw formula
+ requirement fields or host capability. Durable convergence paths use
+@@ -2177,6 +2497,16 @@
+ durable writes. This chooses artifact reuse for existing roots and fail-closed
+ semantics for new or changed formulas.
+ 
++Active legacy convergence roots that lack accepted artifact metadata remain
++observable and can finish already-created beads through existing root metadata
++during the alias window. They cannot create a new retry root, next iteration,
++replacement child, fanout fragment, or speculative wisp until a migration
++preflight compiles the original formula, accepts an artifact, stamps the
++artifact ref, and validates the projection. If the formula source is missing,
++the host is downgraded, or the projection fails, the operation returns the typed
++diagnostic and writes no retry metadata, child, iteration, wisp, convoy, or
++continuation state.
++
+ <!-- REVIEW: added per convergence-canonical-projection -->
+ 
+ `internal/convergence/formula.Formula` and `ValidateForConvergence` are
+@@ -2217,6 +2547,7 @@
+ | speculative wisp creation | compile/accept all candidate formulas before first speculative write | disabled host writes no speculative root or child |
+ | `internal/dispatch/fanout.go` fragment expansion | parent accepted artifact plus fragment `CompileWithResult`/`AcceptCompileResult` calls before expansion writes | disabled host writes no fragment child, convoy, or continuation |
+ | next-iteration convergence/fanout path | compile/accept iteration formula before iteration bead creation | disabled host writes no next-iteration bead |
++| active legacy root migration | compile original formula, accept artifact, validate projection, then stamp artifact ref before any graph-specific mutation | missing source, unsupported future metadata, or downgraded host writes no artifact ref, retry metadata, child, or iteration |
+ 
+ Required tests cover enabled and disabled host capability for CLI sling, API
+ sling, order-created wisps, convergence root creation, convergence retry,

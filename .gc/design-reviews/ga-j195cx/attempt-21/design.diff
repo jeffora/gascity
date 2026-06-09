@@ -1,0 +1,357 @@
+--- .gc/design-reviews/ga-j195cx/attempt-21/design-before.md	2026-05-10 15:48:45.398112188 +0000
++++ engdocs/design/formula-compiler-requirements.md	2026-05-10 16:23:26.354023995 +0000
+@@ -282,6 +282,60 @@
+ - normalized requirement and source attribution
+ - ordered diagnostics with source path, key, value, and severity
+ 
++<!-- REVIEW: added per parser-validation-contract-v21 -->
++
++The fixture is an executable contract, not a sample list. Its checked-in schema
++is:
++
++```yaml
++schema_version: 1
++dimensions:
++  source_format: [toml, json]
++  requires_shape:
++    [omitted, empty_table, string, integer, float, boolean, array, inline_table, dotted_table, unknown_axis]
++  requires_value:
++    [omitted, ">=1", ">=2", "", "2", ">= 2", " >=2", ">=2 ", ">=2.0", ">=2.1", ">=3"]
++  contract_value: [omitted, graph.v2, graph.v1, other]
++  host_capability: [1, 2, invalid]
++  formula_source: [root, child, loop_body, expansion, aspect, transitive_import]
++  v2_construct: [none, check, ralph, retry, on_complete, workflow_metadata_key, workflow_metadata_value]
++rows:
++  - id: requires-v2-host-disabled
++    input:
++      source_format: toml
++      source_path: formulas/root.toml
++      requires_shape: string
++      requires_value: ">=2"
++      contract_value: omitted
++      host_capability: 1
++      formula_source: root
++      v2_construct: retry
++    expect:
++      normalized:
++        formula_compiler: 2
++        source: requires
++        source_path: formulas/root.toml
++        source_key: requires.formula_compiler
++      diagnostics:
++        - order: 1
++          code: formula.compiler_requirement_unsatisfied
++          severity: error
++          source_path: city.toml
++          source_key: daemon.formula_v2
++          source_value: "false"
++      diagnostic_count: 1
++```
++
++The generator expands this dimension table and fails if any supported
++combination lacks an explicit row or an explicit `unsupported` reason. Complete
++coverage is required for accepted and rejected strings, every non-string
++TOML/JSON value kind, legacy `contract`, dual declarations, invalid host
++capability, each v2-only construct location, inherited inline children,
++expansion/aspect/transitive-import contributions, normalized output, source
++attribution, and diagnostic order/count. A reviewer must be able to add a new
++requirement axis or v2-only construct and see exactly which matrix rows,
++diagnostic fixtures, docs rows, and tests must change.
++
+ `go generate ./internal/formula` regenerates the rendered matrix and the golden
+ diagnostic fixtures. CI fails when the generated Markdown table, golden
+ diagnostics, and fixture rows disagree.
+@@ -319,6 +373,25 @@
+ | `contract = "graph.v2"` plus `formula_compiler = ">=1"` plus disabled host | `formula.compiler_requirement_conflict` |
+ | missing `>=2` for v2-only construct plus disabled host | `formula.compiler_requirement_missing` |
+ 
++Diagnostic count and ordering rules:
++
++- Invalid TOML/JSON syntax stops formula validation because raw source
++  locations are unavailable.
++- For a valid raw file, all independent requirement diagnostics are emitted,
++  sorted by precedence group, then source path, line, column, source key, and
++  diagnostic code.
++- Host satisfaction runs only when normalization produced a usable requirement
++  and no fatal requirement syntax, type, axis, or conflict diagnostic exists for
++  that source formula.
++- Missing-requirement diagnostics are emitted once per source formula that owns
++  the undeclared v2-only construct, not once per call site that imported it.
++- `formula.contract_deprecated` and `formula.version_deprecated` warnings are
++  appended after fatal diagnostics but keep their own source order when there
++  are no fatal diagnostics.
++- The matrix row's `diagnostic_count` is authoritative; tests fail if code
++  short-circuits, duplicates warnings, or adds downstream diagnostics not named
++  by the row.
++
+ The implementation must add table-driven tests for accepted strings, rejected
+ strings, invalid TOML types, unknown `[requires]` keys, empty tables, legacy
+ contract compatibility, conflicts, missing requirements, inherited
+@@ -339,6 +412,15 @@
+ No trimming, semver parsing, numeric coercion, or optimistic future-range
+ parsing is allowed in v0.
+ 
++V2-only construct registry completeness is CI-enforced. The registry fixture
++enumerates every syntax location the decoder can produce for steps, children,
++loop bodies, expansion templates, aspects, and imported formulas. A
++reflection-backed unit test fails when a new decoded formula field or
++metadata-controlled workflow construct is added without one of these outcomes:
++registered as v2-only, explicitly classified as v1-compatible, or rejected as
++unsupported input. This prevents silent graph-only syntax from bypassing
++`requires.formula_compiler`.
++
+ ## Canonical Compile Result
+ 
+ <!-- REVIEW: added per canonical-requirement-ownership -->
+@@ -458,9 +540,7 @@
+ func CompileWithResult(ctx context.Context, name string, searchPaths []string, opts CompileOptions) (*CompileResult, error)
+ func CheckRequirements(req NormalizedRequirements, host HostCapabilities) []Diagnostic
+ func HostCapabilitiesFromFormulaV2(enabled bool, source string) HostCapabilities
+-func IsWorkflowRootMetadata(metadata map[string]string) bool
+-func IsGraphWorkflowMetadata(metadata map[string]string) bool
+-func WorkflowRootQuery(kind WorkflowRootKind, source SourceWorkflowScope) beads.ListQuery
++func RootMetadataFacts(metadata map[string]string) (RootMetadataFacts, []Diagnostic)
+ ```
+ 
+ `CheckRequirements` returns diagnostics and never creates beads, writes
+@@ -478,14 +558,30 @@
+ receives a recipe. Mutable recipe metadata is a serialization boundary only and
+ must not be used as a caller-side compiler API.
+ 
+-Workflow-root query authority is split deliberately:
++Workflow-root query authority is split deliberately and has one persistence
++owner:
+ 
+ | Owner | Authority |
+ |---|---|
+ | `internal/formula` | Defines normalized requirement semantics, graph-workflow facts, and exact metadata key/value meanings |
+-| `internal/sourceworkflow` or successor shared predicate package | Builds bead-store query criteria and post-fetch predicates from the formula helpers |
++| `internal/sourceworkflow` | Sole owner of workflow-root bead-store query criteria and post-fetch predicates |
+ | CLI/API/order/convoy/dashboard callers | Call the shared predicate/query helper only; no direct metadata filters |
+ 
++Required `internal/sourceworkflow` APIs:
++
++```go
++func IsWorkflowRootMetadata(metadata map[string]string) bool
++func IsGraphWorkflowMetadata(metadata map[string]string) bool
++func WorkflowRootQuery(kind WorkflowRootKind, source SourceWorkflowScope) beads.ListQuery
++func AcceptedCompileArtifactRef(metadata map[string]string) (string, bool)
++```
++
++`internal/formula.RootMetadataFacts` may classify the formula-owned metadata
++keys, but it does not query beads and it is not the workflow-root predicate.
++The `internal/sourceworkflow` package owns the predicate and query helper for
++all callers. New packages may not create a successor owner without first
++deleting or moving the old one in the same change.
++
+ The query helper must expose typed criteria for all persistence scans that
+ currently need workflow roots: any workflow root, graph workflow roots,
+ canonical-only roots, legacy-only roots during the alias window, and roots that
+@@ -531,7 +627,7 @@
+ | `cmd/gc/cmd_order.go` and `cmd/gc/order_dispatch.go` formula order cook | Preflight `CompileWithResult`; emit one registered failure event on fatal diagnostics; continue later orders | Order tests for unsatisfied host, deprecation warning suppression, and successful later order |
+ | `internal/dispatch/fanout.go`: `CompileExpansionFragment` and any continuation fanout helper | Accept a parent `CompileResult` and compile fragment formulas through the same options before durable fanout writes | Fanout tests prove disabled host capability creates zero child beads, convoys, continuation beads, or metadata |
+ | `cmd/gc/cmd_convoy_dispatch.go` source-workflow scans | Use `internal/sourceworkflow.IsWorkflowRoot` backed by canonical metadata first, legacy fallback second | Convoy tests with canonical-only, legacy-only, dual-stamped, and mixed-store roots |
+-| `internal/sourceworkflow.IsWorkflowRoot` and `ListLiveRoots` | Move predicate to `internal/formula` or keep this package as the sole persistence predicate that calls formula metadata helpers | Predicate parity tests shared by sling, convoy, API, and dispatch |
++| `internal/sourceworkflow.IsWorkflowRoot` and `ListLiveRoots` | Keep `internal/sourceworkflow` as the sole persistence predicate that calls formula metadata helpers | Predicate parity tests shared by sling, convoy, API, and dispatch |
+ | `internal/graphroute.IsCompiledGraphWorkflow` | Read `Recipe.GraphWorkflow` or `CompileResult.GraphWorkflow`, not root metadata strings | Graph route tests prove metadata changes do not affect compiled result semantics |
+ | `internal/api/handler_sling.go` and `handler_formulas.go` | Project `Diagnostic` into Huma response structs; never parse stderr/error strings | API tests for HTTP 400 diagnostic payloads and generated OpenAPI/type updates |
+ | `internal/api/orders_feed.go` and `handler_convoy_dispatch.go` | Use shared workflow-root predicate for closed and open roots | API projection tests for canonical-only roots and legacy fallback |
+@@ -564,6 +660,49 @@
+ allowed only when it came from the same `CompileOptions.HostCapabilities` and
+ search-path set used for the durable operation.
+ 
++<!-- REVIEW: added per durable-artifact-identity-v21 -->
++
++When a durable producer accepts a compile result before writing beads, the
++accepted artifact identity is part of the contract:
++
++```go
++type AcceptedCompileArtifact struct {
++    ArtifactVersion   int
++    FormulaName       string
++    HostCapabilities  HostCapabilities
++    SearchPathsHash   string
++    OptionsHash       string
++    VarsHash          string
++    Provenance        Provenance
++    Requirements      NormalizedRequirements
++    Diagnostics       []Diagnostic
++    CreatedBy         string
++    CreatedAt         time.Time
++}
++```
++
++`SearchPathsHash` covers the ordered formula search path after pack/import
++resolution. `OptionsHash` covers compile options that can affect expansion,
++runtime-var validation, graph transforms, and diagnostic projection. `VarsHash`
++covers only values used while compiling; secrets are hashed or omitted by a
++typed redaction policy. A durable caller may reuse a `CompileResult` only when
++these identities match the operation it is about to perform. Otherwise it must
++compile again with current options before writing.
++
++Retention semantics:
++
++- Root, convergence, order-wisp, fanout, retry, and `on_complete` producers
++  persist an accepted artifact whenever the full provenance or diagnostic set
++  cannot fit in root metadata.
++- The artifact is immutable and retained at least as long as the root bead or
++  workflow history that references it.
++- Garbage collection may delete an artifact only after no live or archived
++  root metadata references `gc.formula_compile_artifact`.
++- Reusing an artifact after a host downgrade is allowed only for already-created
++  roots whose metadata references that artifact. Selecting or compiling a new
++  formula after the downgrade must run `CompileWithResult` against the current
++  host capability and can fail with zero writes.
++
+ ## Compatibility With `contract`
+ 
+ <!-- REVIEW: added per migration-compatibility-contract -->
+@@ -613,6 +752,17 @@
+ remain dual-declared until the probe is removed or proven to parse `[requires]`
+ identically.
+ 
++<!-- REVIEW: added per compatibility-corpus-v21 -->
++
++This design supersedes conflicting rollback language in
++`engdocs/proposals/formula-migration.md`, especially any text that treats
++`GC_NATIVE_FORMULA=false` as a production runtime fallback after requirement
++normalization ships. That proposal must be updated or marked superseded in the
++same PR stack that introduces user-visible `[requires]` diagnostics. The only
++permitted rollback after user-visible diagnostics ship is to restore
++dual-declared formula sources and dual root metadata, or to disable the new
++producer path before it writes durable state.
++
+ Per-entry-point behavior is therefore fixed:
+ 
+ | Entry point | Old or legacy-only `contract` formula | Dual-declared formula | Requires-only formula | Host `formula_v2=false` |
+@@ -699,6 +849,39 @@
+ floor is recorded in the release checklist and `docs/reference/config.md` before
+ any first-party requires-only conversion lands.
+ 
++Old-reader and native-vs-`bd` parity are exercised by a pinned corpus under
++`internal/formula/testdata/compat_corpus/`. The corpus contains at least these
++named fixtures:
++
++| Fixture | Required readers | Expected result |
++|---|---|---|
++| `legacy-only-graph-v2` | latest two published Gas City minor releases, current `main`, `bd >= 1.0.0` probe | old readers and new host-enabled readers accept; new host-disabled reader fails before writes |
++| `dual-declared-graph-v2` | same | old readers accept through `contract`; new readers report source `dual` and deprecation warning |
++| `requires-only-graph-v2` | current `main` only until minimum binary floor | old readers are allowed to fail; first-party distribution blocked until floor is enforced |
++| `unsupported-future-requirement` | current `main` | deterministic `formula.compiler_requirement_unsupported` |
++| `invalid-shape-non-string` | current `main` | deterministic `formula.requirement_invalid_type` |
++| `diagnostic-source-attribution` | direct CLI, API-routed CLI, Huma endpoint, dashboard fixture | identical code, source path/key/value, remediation, and host capability |
++
++The supported reader set for a release is materialized in
++`docs/release/formula-compiler-compatibility.yaml`. It records exact binary
++versions or SHAs for the latest two supported Gas City minor releases, current
++`main`, and the minimum `bd` probe version. For this design baseline, the probe
++floor is `bd >= 1.0.0`; a release may raise it only by updating the artifact,
++the corpus expected outputs, and release notes in the same change. The parity
++gate runs:
++
++```bash
++gc formula validate --compat-corpus internal/formula/testdata/compat_corpus --json
++GC_NATIVE_FORMULA=false gc formula validate --compat-corpus internal/formula/testdata/compat_corpus --json
++```
++
++The first command is authoritative for production behavior. The second command
++is a release probe only; if it diverges on first-party dual-declared formulas,
++requires-only conversion remains blocked. Pass/fail is strict: accepted
++fixtures must match normalized requirement, source attribution, diagnostics,
++exit code, and provenance; rejected fixtures must match diagnostic code, count,
++ordering, and source attribution.
++
+ Measurable release gates:
+ 
+ | Gate | Artifact | Blocks |
+@@ -726,6 +909,20 @@
+ to restore dual declarations and dual root stamps, not to reinterpret
+ requires-only formulas in old binaries.
+ 
++First-party graph packs may become requires-only only when their pack metadata
++also declares a compatible binary floor:
++
++```toml
++[pack]
++requires_gc = ">=<minimum-floor-from-formula-compiler-min-floor.json>"
++```
++
++Pack resolver and import loading must reject a first-party requires-only graph
++pack when the active binary is below that floor, before formula selection or
++durable writes. Tests cover direct local packs, installed packs, imported
++pinned packs, transitive imports, and shadowed formulas where a losing source
++would have required a higher floor.
++
+ Dual-stamp retirement criteria:
+ 
+ 1. All supported readers use the shared canonical workflow-root predicate.
+@@ -919,6 +1116,34 @@
+ }
+ ```
+ 
++<!-- REVIEW: added per provenance-owner-v21 -->
++
++Formula resolution produces a typed `ResolvedFormulaSource`; compilation does
++not rediscover pack context from paths:
++
++```go
++type ResolvedFormulaSource struct {
++    FormulaName       string
++    OriginalPath      string
++    StagedPath        string
++    LayerName         string
++    LayerPriority     int
++    Pack              PackProvenance
++    Imports           []ImportProvenance
++    RequestedRef      string
++    LockedRevision    string
++    ContentHash       string
++    Dirty             bool
++    TransitiveSources []ResolvedFormulaSource
++}
++```
++
++The resolver/import layer owns `ResolvedFormulaSource` construction. The
++formula compiler consumes it and copies the relevant fields into
++`CompileResult.Provenance`. No caller may reconstruct pack name, requested ref,
++locked revision, dirty status, or transitive import chain from a staged path,
++formula name, or bead metadata after compilation.
++
+ Layer resolution must preserve pack binding before symlink staging. A staged
+ winner path under `.beads/formulas/` is not enough provenance by itself; the
+ compile result records the original layer, pack, import source/ref, locked
+@@ -966,6 +1191,34 @@
+ transitive imports, lockfile-backed refs, remote SHA pins, and shadowed formulas
+ whose losing source still contains legacy `contract`.
+ 
++`migration_hints` is stable JSON, not prose. Each hint contains:
++
++```json
++{
++  "code": "formula.migration.add_requires",
++  "severity": "info",
++  "formula": "code-review-loop",
++  "source_path": "packs/acme/formulas/code-review-loop.toml",
++  "source_key": "contract",
++  "current": "contract = \"graph.v2\"",
++  "recommended": "[requires]\\nformula_compiler = \">=2\"",
++  "first_party": false,
++  "pack": "acme",
++  "requested_ref": "v1.2.3",
++  "locked_revision": "abc123",
++  "requires_gc_floor": ">=<minimum-floor>",
++  "safe_automatic_edit": true
++}
++```
++
++Required hint codes are `formula.migration.add_requires`,
++`formula.migration.keep_dual_declaration`,
++`formula.migration.remove_legacy_contract_when_floor_allows`,
++`formula.migration.raise_pack_requires_gc`, and
++`formula.migration.pin_pack_revision`. JSON field names, codes, and severities
++are versioned by `schema_version`; external pack tooling must not parse
++human-readable diagnostic messages.
++
+ Operational meaning of reproducibility values:
+ 
+ | Value | Meaning | Policy effect |

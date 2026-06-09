@@ -1,16 +1,16 @@
-# Felix Moreau — Docs & DX Consistency Reviewer (Iteration 19 / Attempt 1, Independent DeepSeek V4 Flash Style Review)
+# Felix Moreau — Docs & DX Consistency Reviewer (Iteration 20 / Attempt 1, Independent DeepSeek V4 Flash Style Review)
 
 **Verdict:** block
 
 **Scope:** Docs & DX Consistency — documentation consistency, operator terminology, tutorial integrity, and maintenance word disambiguation.
 
-This independent review evaluates the Iteration 19 / Attempt 1 snapshot of the Core and Gastown Pack Split design (`.gc/design-review-inputs/core-gastown-pack-migration/design.md`) against the live codebase at `/data/projects/gascity/` and `requirements.md`.
+This independent review evaluates the Iteration 20 / Attempt 1 snapshot of the Core and Gastown Pack Split design (`.gc/design-review-inputs/core-gastown-pack-migration/design.md`) against the live codebase at `/data/projects/gascity/` and `requirements.md`.
 
 ---
 
 ## Executive Summary
 
-As Felix Moreau, the **Docs & DX Consistency Reviewer**, I have conducted a rigorous audit of the revised design in Iteration 19.
+As Felix Moreau, the **Docs & DX Consistency Reviewer**, I have conducted a rigorous audit of the revised design in Iteration 20.
 
 The design continues to make major strides in formalizing the **System-Pack Wording Matrix** (`system-pack-wording.generated.yaml`) and establishing a bidirectional, generated documentation linter as a release-gate blocking invariant. Aligning terminology parity within the same implementation slice as its corresponding behavior represents a massive step forward for Gas City's developer experience (DX).
 

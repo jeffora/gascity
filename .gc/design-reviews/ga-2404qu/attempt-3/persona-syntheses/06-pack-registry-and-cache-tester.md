@@ -1,0 +1,46 @@
+# Marcus Driscoll
+
+**Persona verdict:** block
+
+**Sources:** Claude, Codex, DeepSeek V4 Flash. A Gemini-named artifact was also present, but its content identifies as a DeepSeek V4 Flash iteration-2 review; it was treated as supporting evidence for the DeepSeek lane.
+
+**Consensus findings:**
+- [Blocker] Public Gastown cache identity and upgrade behavior are under-specified. All sources flagged the same core issue: removing public Gastown from `builtinpacks.IsSource` flips `RepoCacheKey` from the `bundled-synthetic-v1` namespace to the ordinary remote cache namespace. The design does not choose between dual-read, one-time migration, mandatory reinstall plus doctor diagnostic, or hard offline failure. That leaves existing old-key caches, old `packs.lock` entries, and offline upgrades with unclear behavior.
+- [Blocker] The post-migration behavior of every `IsSource` branch must be specified and tested, not only the registry-level identity. The relevant sites are `internal/config/pack_include.go` synthetic validation and cache-key logic, `internal/packman/cache.go` synthetic materialization vs git clone, `internal/packman/check.go` locked-import checks, and `internal/packman/install.go` import reading. Retired Maintenance, historical embedded Gastown, public Gastown synthetic aliases, and old `internal/bootstrap/packs/core` sources need negative tests at the call sites that used to accept them.
+- [Blocker] Existing packman/config tests that assert public Gastown synthetic fallback have no replacement behavior. `TestSyncLockUsesBundledFallbackForPublicGastownWhenRemoteUnavailable` and `TestResolveImportPackRefAcceptsPublicGastownSyntheticCache` encode the old bundled fallback. The design must state whether offline public Gastown init/install is intentionally no longer supported, has a new mechanism, or gets a compatibility path, then replace or invert those tests.
+- [Major] Required system-pack repair and integrity semantics are weaker than the target invariant. `MaterializeBuiltinPacks` prunes generated stale files while materializing, but the doctor/check path that verifies embedded manifests does not reject unexpected files in required packs. For `core`, `bd`, and `dolt`, the lane consensus is that unexpected files should be rejected or pruned; "prove inert" is too weak for included system-pack directories that can influence formulas, orders, scripts, overlays, and prompts.
+- [Major] Provider-pack continuity for `dolt` is asserted but not proven. Moving the `dog` agent from Maintenance into Core can preserve bytes while still breaking formulas and orders that hardcode `pool = "dog"`. The design must resolve whether `dog` is a stable pool-name contract provider packs may bind to, or make the dolt pool configurable. A dolt continuity test must prove the `mol-dog-*` formulas/orders still resolve against the Core-provided agent with Maintenance absent.
+- [Major] Stale retired pack directories may still influence prompt loading. The design says stale `.gc/system/packs/{maintenance,gastown}` directories are preserved and ignored by config loading, but reviewers identified prompt baseline globbing that can still discover stale prompt templates under retired directories. The design needs a prompt-loader filter, migration step, or doctor diagnostic so "ignored" applies beyond config includes.
+- [Major] The global `SyntheticContentHash()` change is an expected migration event and must be explicit. Removing Maintenance/Gastown from `All()` invalidates all existing synthetic caches, including `core`, `bd`, and `dolt`. That can be safe, but the design must state the one-time re-materialization behavior and test self-heal rather than leaving it implicit.
+- [Major] The provider-dependent `bd`/`dolt` inclusion matrix and materialization continuity need concrete tests. The design should compare materialized manifests, provenance, include behavior, and install locks before and after Core repair across default `bd`, explicit `bd`, non-`bd`, and `exec gc-beads-bd` cases.
+- [Major] Maintenance removal is not fully tracked through comments, tests, and diagnostics. `requiredBuiltinPackNames`, `builtinPackIncludes` comments, `TestBuiltinPackIncludes_AlwaysIncludesMaintenance`, matrix expected counts, and legacy doctor wording like "maintenance/core is supplied implicitly" all need named updates.
+- [Major] The fate of `PublicRepository`, `PublicGastownPackSource`/`PublicGastownPackVersion`, `normalizeRepository`'s `gascity-packs` branch, and `publicSubpathForPack` is unresolved. The design must distinguish retained ordinary remote-pack behavior from dead synthetic-alias support and guard against silent alias reintroduction.
+
+**Disagreements:**
+- Claude returned `approve-with-risks`, while Codex and DeepSeek returned `block`. My assessment is `block`: Claude agreed on major required changes and surfaced the same `dog`, `IsSource`, required-pack integrity, cache-hash, and offline-cache risks. These are not merely implementation details because they define upgrade and cache contracts.
+- Claude emphasized that registry identity and synthetic-cache validation are already strong enough if the test plan names the right negative cases. Codex and DeepSeek judged the missing cache-key and offline behavior contract as blocking. I agree with Codex/DeepSeek because users upgrading existing cities can observe incompatible cache and lock behavior.
+- The reviewers vary on whether unexpected files in required packs could be accepted if proven inert. I assess that required included packs should reject or prune unexpected files; the preserve/ignore contract belongs only to retired non-included directories.
+- DeepSeek's iteration-2 artifact adds prompt-loader stale-template and doctor-message findings not highlighted as strongly by Claude/Codex. I include them because they directly challenge the design's "retired dirs are ignored" and "legacy repair remains actionable" claims.
+
+**Missing evidence:**
+- Exact public Gastown cache-key contract after `IsSource(PublicGastownPackSource)` becomes false.
+- Exact offline behavior for new binary plus existing old synthetic public-Gastown cache, and for offline `gc init --template gastown` or `gc import install`.
+- Tests proving old synthetic public Gastown/Maintenance caches are ignored, migrated, or diagnosed according to the chosen policy.
+- Call-site-specific tests for all `IsSource` branches in config and packman paths.
+- Tests proving retired `.gc/system/packs/{maintenance,gastown}` prompt templates cannot be selected as prompt baselines.
+- Tests proving `core`, `bd`, and `dolt` system-pack directories reject or prune unexpected files, not only that expected embedded files match.
+- A dolt integration or composition test proving `pool = "dog"` resolves from Core after Maintenance is absent.
+- A self-heal test for old synthetic caches whose marker content hash changes after the bundled pack set shrinks.
+- Updated test migration inventory for `TestBuiltinPackIncludes_AlwaysIncludesMaintenance`, the `TestBuiltinPackIncludes_*` matrix, public Gastown synthetic fallback tests, and legacy doctor message assertions.
+- Decision on whether `PublicRepository` and the `gascity-packs` normalization branch remain for ordinary remote imports or should be deleted with the retired synthetic aliases.
+
+**Required changes:**
+- Define and test the `RepoCacheKey` upgrade strategy for public Gastown: dual-read, one-time migration, explicit reinstall plus doctor diagnostic, or clear hard failure. Include old-key cache, new-key lookup, stale-cache cleanup/diagnostic, and offline behavior.
+- Enumerate the five `IsSource` production branches in the design and add tests proving public Gastown and retired aliases take the intended non-bundled or rejected path at each site.
+- Replace/invert the public Gastown synthetic fallback tests, including `TestSyncLockUsesBundledFallbackForPublicGastownWhenRemoteUnavailable` and `TestResolveImportPackRefAcceptsPublicGastownSyntheticCache`, with tests for the chosen post-migration behavior.
+- Strengthen required system-pack integrity so `core`, `bd`, and `dolt` reject or prune unexpected files; reserve stale-directory preservation for retired, non-included Maintenance/Gastown directories.
+- Resolve the `dog` pool contract and add a dolt provider continuity test proving `mol-dog-*` formulas/orders compose and resolve against the Core-provided `dog` agent with Maintenance absent.
+- Ensure stale retired pack directories cannot influence prompt loading, either by filtering prompt baseline discovery to required packs or by adding a migration/doctor diagnostic.
+- State that `SyntheticContentHash()` changes when the bundled set shrinks and add a self-heal re-materialization test for old `core`/`bd`/`dolt` synthetic caches.
+- Update `requiredBuiltinPackNames`, `builtinPackIncludes` comments, `TestBuiltinPackIncludes_AlwaysIncludesMaintenance`, the provider matrix expected counts, `examples/dolt/pack.toml` wording, and legacy doctor repair messages.
+- Decide and document the fate of `PublicRepository`, `PublicGastownPackSource`, `PublicGastownPackVersion`, `normalizeRepository`'s `gascity-packs` branch, and `publicSubpathForPack`; add a guard test that no retired public synthetic alias is reintroduced accidentally.

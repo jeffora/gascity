@@ -1,0 +1,62 @@
+--- .gc/design-reviews/ga-unpr2y/attempt-8/design-before.md	2026-06-07 08:58:57.019423764 +0000
++++ internal/session/DESIGN.md	2026-06-07 10:05:49.441299312 +0000
+@@ -5,7 +5,7 @@
+ | Status | Draft backlog |
+ | Behavior source | `REQUIREMENTS.md` |
+ | Scope | Technical architecture and extraction plan for session ownership |
+-| Latest design-review disposition | Attempt 7 global verdict `block`; this revision is an `iterate` response |
++| Latest design-review disposition | Attempt 8 global verdict `block`; this revision is an `iterate` response |
+ 
+ This document tracks the technical design for moving session behavior toward a
+ clearer ownership boundary. It is intentionally separate from
+@@ -565,6 +565,50 @@
+ current-attempt artifacts are absent. Until that is fixed, this design treats
+ the global synthesis file, not stale persona paths, as the review input.
+ 
++## Attempt 8 Review Response
++
++<!-- REVIEW: added per attempt-8-global-synthesis -->
++
++Attempt 8 still blocks decomposition. This revision keeps
++`design_review.verdict=iterate` and narrows the approved next work to a
++non-mutating Slice 0 preflight. The review found that the current design
++already points in the right direction, but many gates are still prose or broad
++tables rather than executable artifacts. No mutation-owning, behavior-moving,
++target-resolution, repair, event, reconciler, diagnostic, or API-routing bead
++may start until Slice 0 has landed the inventories, guards, parity files,
++vocabulary checkpoints, diagnostics baseline, and proof commands named below.
++
++The Attempt 8 blockers are applied as hard design gates:
++
++| Finding | Design response | Exit gate |
++|---|---|---|
++| Slice 0 proof is still prose. | Slice 0 is the only schedulable implementation deliverable. It must physically create the inventory, parity, vocabulary, guard, allowlist, diagnostics, baseline, and proof artifacts; zero-match tests are failures. | Close a Slice 0 bead that commits `SLICE0_BASELINE.md`, `BOUNDARY_INVENTORY.md`, `SESSION_BOUNDARY_SYMBOLS.yaml`, `SCENARIO_PARITY.yaml`, `VOCABULARY_CHECKPOINTS.yaml`, guard allowlist/fixtures, diagnostics manifest, and proof command transcripts. |
++| Mutation ownership and static guard coverage miss bypass paths. | The inventory and guard must be source-complete across production `cmd/` and `internal/` paths that can mutate session beads directly or indirectly. Broad doctor, repair, migration, generic bridge, API/Huma, manager-method, package-mutator, patch-map, and subprocess mutation exclusions are no longer acceptable as class-level exceptions. | Guard fixtures fail for generic store handles, interface receivers, wrapper receivers, Huma/generic bead routes, direct manager calls, patch-map extension, dynamic keys, package-level mutators, raw bead status/type updates, repair helpers, and subprocess `bd` mutation routes unless a stable inventory ID names the exact path/symbol/key family and expiry. |
++| Command atomicity, stale-writer safety, and one-writer migration are unresolved. | Every command-applier row must state its preconditions, validation point, write primitive, fence token or phase, stale-success behavior, provider side-effect ordering, partial-state repair, race tests, and final one-writer proof. Blind writes are blocked unless classified as conditional, tokened/repair-converged, or inert-when-lost with proof. | Runtime-start, close, wake, drain, token backfill, identity retirement, batch metadata, and API mutation routes cannot delegate until their applier rows prove conditional writes or detect-and-converge matrices for stale and partial states. |
++| Close, work release, and event recovery are not durably recoverable enough. | Close/retire must preserve release keys or write a durable pending-release/closing fact before identity clearing. Events remain hints; durable scans are the recovery source of truth. | Add the closed-session scanner contract with exact query shape, cadence, boundedness, release-key snapshot, completion fact, idempotency key, supersession key, duplicate-scan behavior, partial-query handling, restart behavior, and stale-successor suppression tests. |
++| Target resolution and projection parity remain surface-incomplete. | The raw classifier remains policy-free candidate collection. Each surface owns its compatibility chain, materialization/repair policy, closed-ID behavior, recipient set, output/wire shape, and no-leak rule. | API, CLI, mail send/query, extmsg, assignee, nudge, attach, inspect, log, transcript, pool resume, and generated-client fixtures must pass before that surface delegates; no surface can inherit another surface's precedence or output behavior by default. |
++| Session/reconciler and runtime-fact boundaries are not decomposition-ready. | `AwakeInput` must be split into field-level disposition rows: lifecycle eligibility owned by session; demand, scale, work aggregation, provider health, progress, restart budget, and alert policy owned by controller/runtime adapters. Pure deciders receive clock and freshness as facts. | Add a guarded pure-decider file set, zero direct `Now` fallback in deciders, eligibility-mask tests for seven state classes, runtime observation completeness files, and restored or replacement health/progress/scale proof before reconciler slices move. |
++| Repair, diagnostics, and performance are not operable. | `RepairEmptyType` and other read-path repairs must either delegate to an audited repair helper or return typed repair-needed facts. Diagnostics and budgets must be centralized and tested, not command-local strings. | Slice 0 or the first owning slice adds a diagnostics manifest, trace outcome compatibility table, doctor/session-inspect registry or golden file, renderer/filter tests, persistence-error propagation tests, query-count budgets, backend index proof or measured baselines, subscriber backpressure tests, and large-city baselines. |
++| Vocabulary and scope controls still permit premature abstractions. | Active next-slice vocabulary is separated from design-only future bounds. Shared types need first delegated production caller evidence and exact demanded fields before they leave private slice code. | `TestVocabularyCheckpoints` must be seeded with existing-contract rows and fail on undeclared fields, unused fields, future-only rows, broad optional envelopes, and expansion beyond the first caller's demanded fields without a second caller. |
++| Migration and rollback contracts lack data-direction proof. | Each slice must prove data-direction convergence and rollback for new-path metadata, not just route restoration. API and CLI migration must choose a single end route per surface: `worker.Handle` by default, or a narrow session command factory exception with owner and expiry. | Bead metadata must list converted callers, allowed legacy rows, retired rows, guard changes, data-direction convergence proof, one-writer proof, rollback route, and exact API/CLI route inventory before a slice closes. |
++
++Unfixable in this document:
++
++- The attempt artifact path bug is in the design-review workflow formula, not
++  `internal/session/DESIGN.md`. This document records the failure mode and
++  requires future workflow output stamping to write child persona syntheses
++  under the current `$ATTEMPT_DIR`. It cannot repair the formula from this
++  design response.
++
++Slice 0 is therefore the only approved next step. Its implementation must be
++non-mutating: it may add or update ledgers, YAML inventories, static guards,
++fixtures, diagnostics manifests, and tests, but it must not move production
++session behavior, add public command APIs, change target resolution, add event
++payloads, change repair behavior, or alter reconciler decisions. Any later
++slice must depend on the closed Slice 0 bead and cite the exact inventory IDs,
++scenario rows, vocabulary rows, diagnostics entries, proof commands, and
++rollback rows it consumes.
++
+ ## Product Rule
+ 
+ Technical refactors must preserve the behavior in `REQUIREMENTS.md` unless code

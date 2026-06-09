@@ -1,0 +1,167 @@
+--- .gc/design-reviews/ga-dtvdnd/attempt-4/design-before.md	2026-06-09 06:56:35.697574079 +0000
++++ .gc/design-reviews/ga-dtvdnd/attempt-4/design-after.md	2026-06-09 08:53:54.970803913 +0000
+@@ -4,9 +4,9 @@
+ rig: gascity
+ rig_root: /data/projects/gascity
+ artifact_root: /data/projects/gascity/plans
+-status: questions
++status: draft
+ created_at: 2026-06-04T00:00:00Z
+-updated_at: 2026-06-09T01:20:00Z
++updated_at: 2026-06-09T08:58:00Z
+ ---
+ 
+ # Requirements: Core and Gastown Pack Split
+@@ -29,70 +29,67 @@
+ 
+ The desired product outcome is a role-neutral Gas City runtime in which Core is
+ the only Gas City-owned pack required for normal `gc` operation, Maintenance is
+-retired as a standalone pack, and Gastown behavior is loaded explicitly from the
+-public `gascity-packs/gastown` pack. Existing operators must receive actionable,
+-non-interactive diagnostics and repair guidance for legacy pack references.
+-Gastown operators must not lose current supported behavior when Core assets are
+-generalized.
+-
+-<!-- REVIEW: added per requirements-schema-compliance-officer -->
+-
+-The requirements remain in `questions` status because the next planning step
+-must attach or generate two supporting artifacts before implementation planning
+-can be treated as complete: a validated asset migration ledger and a
+-behavior-preservation proof manifest. The requirements below define the product
+-contracts those artifacts must satisfy; they do not embed a file-by-file
+-implementation map in this requirements document.
++retired as a standalone active pack, and Gastown behavior is loaded explicitly
++from the public `gascity-packs/gastown` pack. Existing operators must receive
++actionable, non-interactive diagnostics and repair guidance for legacy pack
++references. Gastown operators must not lose supported behavior when Core assets
++are generalized or when Gastown behavior moves to the public pack authority.
++
++The migration is not ready for implementation approval until the supporting
++asset migration ledger, behavior-preservation proof, public-pack validation,
++and acceptance proof matrix described below exist and pass. Those artifacts are
++acceptance evidence, not inline implementation design.
+ 
+ ## W6H
+ 
+-<!-- REVIEW: added per requirements-schema-compliance-officer -->
+-
+ | Dimension | Requirement |
+ | --- | --- |
+ | Who | Gas City maintainers need an auditable Core pack boundary; Gas City operators need stable non-Gastown runtime behavior; Gastown operators need explicit public Gastown imports; pack authors need clear ownership rules; existing-city upgraders need safe migration diagnostics. |
+ | What | Split the current mixed pack behavior into required Core SDK behavior, retired Maintenance behavior, and explicit external Gastown behavior. Core must stay role-neutral; Gastown roles, workflows, prompts, commands, overlays, and role-specific recovery behavior belong to the public Gastown pack. |
+ | When | Fresh `gc init` output must use the new model immediately after the migration ships. Existing cities must be diagnosable before startup or operator workflows fail from retired pack paths. The public Gastown pack and Gas City release must be version-compatible before the migration is accepted. |
+-| Where | The migration applies to Gas City source-tree packs, generated/materialized system packs, public pack imports, city and rig config, docs, examples, doctor/import-state output, and tests. It also applies to external `gascity-packs/gastown` validation because that pack becomes the Gastown authority. |
++| Where | The migration applies to Gas City source-tree packs, generated/materialized system packs, public pack imports, city and rig config, docs, examples, doctor/import-state output, runtime state, lock/cache state, and tests. It also applies to external `gascity-packs/gastown` validation because that pack becomes the Gastown authority. |
+ | Why | Gas City's SDK must not encode Gastown roles or Maintenance as hidden framework behavior. Role behavior must be user-supplied pack configuration, while SDK infrastructure remains self-sufficient with only the controller and required Core runtime support. |
+-| How | Core is required in resolved config for real cities. Gastown is an explicit import using `https://github.com/gastownhall/gascity-packs.git//gastown` with the pinned version used by fresh Gastown init. Maintenance is neither auto-included nor silently materialized. Diagnostics report missing Core and retired imports with exact source attribution and explicit repair actions. |
+-| How much / scale | The migration covers every active pack asset under the three legacy pack roots, every generated/materialized system-pack source that can load those assets, every supported fresh-init template, all existing-city legacy import shapes, and all docs/tests that present retired paths as authoritative. |
++| How | Core is a required system-pack identity in resolved config for real cities, with trusted provenance that user imports cannot shadow. Gastown is an explicit import using `https://github.com/gastownhall/gascity-packs.git//gastown` with the pinned immutable `sha:` version used by fresh Gastown init. Maintenance is neither auto-included nor silently materialized. Diagnostics run in a bootstrap-only mode when normal pack resolution is broken and report missing Core or retired imports with exact source attribution and explicit repair actions. |
++| How much / scale | The migration covers every active pack asset under the three legacy pack roots, every generated/materialized system-pack source that can load those assets, every supported fresh-init template, all existing-city legacy import shapes, every supported public-pack lock/cache state, and all docs/tests that present retired paths as authoritative. |
+ 
+ ## Example Mapping
+ 
+-<!-- REVIEW: added per requirements-schema-compliance-officer -->
+-
+ | Type | Concrete example | Expected behavior | Evidence |
+ | --- | --- | --- | --- |
+-| Happy path | A new non-Gastown city is initialized and run with no Gastown import. | Resolved config includes required Core behavior and any provider-conditioned support packs, but no Gastown roles, Gastown workflows, or Maintenance pack import. The controller can execute SDK infrastructure operations without a configured Gastown agent. | Unit or integration test for fresh non-Gastown init plus resolved-config inspection. |
+-| Happy path | `gc init --template gastown` creates a Gastown city. | The root `pack.toml` and default rig import declare `[imports.gastown]` from `https://github.com/gastownhall/gascity-packs.git//gastown` with the current pinned version (`sha:d3617d1319a1206ac85f69ba024ec395c49c6f4b` as of this requirements update). No in-tree `examples/gastown/packs/gastown`, `.gc/system/packs/gastown`, or implicit Maintenance fallback is used. | Command verification or existing init test extended to check source, version, lock/cache provenance, and absence of legacy fallback. |
+-| Negative path | A city config or pack import graph omits Core. | `gc doctor` and `gc import-state` can still report the problem instead of failing before diagnostics. The report identifies the config source/layer that omitted Core, states that Core is required for real cities, and offers an explicit idempotent repair action. | Golden-output and JSON-output tests for missing-Core diagnostics. |
++| Happy path | A new non-Gastown city is initialized and run with no Gastown import. | Resolved config includes required Core behavior and provider-conditioned support packs, but no Gastown roles, Gastown workflows, or Maintenance pack import. The controller can execute SDK infrastructure operations without any configured Gastown agent. | Fresh non-Gastown init test plus resolved-config inspection and controller-only operation check. |
++| Happy path | `gc init --template gastown` creates a Gastown city. | The root `pack.toml` and default rig import declare `[imports.gastown]` from `https://github.com/gastownhall/gascity-packs.git//gastown` with the current immutable `sha:` pin. No in-tree `examples/gastown/packs/gastown`, `.gc/system/packs/gastown`, or implicit Maintenance fallback is used. | Command verification for source, version, lock/cache provenance, public-pack proof, and absence of legacy fallback. |
++| Happy path | The asset ledger classifies a split asset such as a shared architecture template. | The ledger records the original path, Core-neutral successor, Gastown-specific successor if any, stripped behavior, retained behavior, fallback classification, and proof commands. The behavior-preservation proof covers any moved Gastown-specific triggers or prompt variables. | Ledger validator plus behavior-preservation proof row for the split asset. |
++| Negative path | A city config or pack import graph omits Core. | `gc doctor`, `gc import-state`, and the selected repair command can still run in bootstrap-only mode. The report identifies the config source/layer that omitted Core, states that Core is required for real cities, and offers the explicit idempotent repair action. | Golden text/JSON diagnostics and bootstrap-mode command tests for missing Core. |
++| Negative path | A user or third-party import tries to shadow required Core with another pack named `core`. | Runtime behavior fails closed with a collision diagnostic before behavior-changing operations execute. Doctor/import-state can still report the source chain and recommended repair. | Pack-resolution collision matrix and duplicate-Core diagnostic tests. |
+ | Negative path | An existing city imports `packs/maintenance`, `packs/gastown`, `examples/gastown/packs/gastown`, or `.gc/system/packs/maintenance`. | Diagnostics classify the reference as retired or legacy, name the source that introduced it, distinguish required Core from optional Gastown, and do not silently redirect to a hidden fallback. | Import-state and doctor tests covering each legacy path shape. |
+-| Negative path | A Core asset or generated Core metadata routes work to a literal Gastown role name such as Mayor, Deacon, Polecat, Refinery, Witness, Boot, Crew, or Gastown. | Role-neutrality checks fail unless the occurrence is in allowed migration documentation, generated review artifacts, or a negative/absence test fixture. | Absence-scan test with positive controls and allowed-path exceptions. |
+-| Edge case | A user renamed or disabled the default Core maintenance executor. | SDK infrastructure still operates with only the controller. Agent-executed Core maintenance work is bound through configurable pack data; if no executor is available, the work remains visible or diagnosable rather than causing Go-side role special-casing. | Unit/integration test using a renamed executor and a no-executor city. |
+-| Edge case | The operator is offline while a Gastown city uses a lockfile for the public Gastown pack. | If the exact pinned external pack is already present in the repo cache, resolution uses that cache and reports provenance. If not, resolution fails with an actionable missing-cache diagnostic and never falls back to in-tree examples or system packs. | Offline cache-hit and cache-miss command tests. |
++| Negative path | A Core asset or generated Core metadata routes work to a literal Gastown role name such as Mayor, Deacon, Polecat, Refinery, Witness, Boot, Crew, or Gastown. | Role-neutrality checks fail unless the occurrence is in allowed migration documentation, generated review artifacts, or a negative/absence test fixture. | Absence-scan test over source plus generated/materialized outputs with positive and negative controls. |
++| Edge case | A user renamed or disabled the default Core maintenance executor. | Deterministic SDK infrastructure still operates with only the controller. Optional agent-executed Core maintenance work is bound through configurable pack data; if no executor is available, the work remains visible or diagnosable rather than causing Go-side role special-casing. | Unit/integration test using a renamed executor and a no-executor city. |
++| Edge case | The operator is offline while a Gastown city uses a lockfile for the public Gastown pack. | If the exact pinned external pack is already present in the repo cache with matching provenance and digests, resolution uses that cache and reports provenance. If not, resolution fails with an actionable missing-cache diagnostic and never falls back to in-tree examples, system packs, or bundled synthetic aliases. | Network-disabled offline cache-hit, cache-miss, digest-mismatch, missing-subpath, and stale-alias command tests. |
++| Edge case | An existing city has in-flight sessions that were started from retired Maintenance or in-tree Gastown materialized content. | Diagnostic mode reports the in-flight dependency. Mutating repair refuses while live affected sessions or controllers can still consume the retired content. Operators must drain or restart those sessions before repair; after repair no new work may load retired paths. | Upgrade-state test with live-session detection and post-repair no-retired-load verification. |
++| Edge case | Gas City and the public Gastown pack are out of the supported pin window. | New binaries with old locked packs and old binaries with activation-pinned packs fail closed before behavior-changing operations, with version-skew diagnostics and rollback guidance. Compatibility-pin windows are explicit and temporary. | Release matrix tests for old/new binary crossed with compatibility/activation pins. |
+ | Edge case | Stale `.gc/system/packs/maintenance` or old synthetic cache state exists after upgrade. | The stale state is ignored, pruned by an explicit repair action, or reported as retired state. It is never loaded as an active Maintenance pack. | Upgrade-state integration test or command verification. |
+ 
+ ## Acceptance Criteria
+ 
+-<!-- REVIEW: added per acceptance-traceability -->
+-
+ | ID | Criterion | Verification |
+ | --- | --- | --- |
+ | AC1 | The requirements artifact follows `gc.mayor.requirements.v1`: required front matter only, required top-level section order, W6H, example mapping, consolidated acceptance criteria, out-of-scope, and open questions. | Design-review schema check or manual review against `/data/projects/gascity-packs-worktrees/gc-plan-pack/gascity/assets/skills/mayor/requirements.schema.md`. |
+-| AC2 | Core is represented as required runtime behavior in resolved config for real cities, with a clear dev/test escape hatch if tests need to construct partial configs. Normal SDK infrastructure operations must not depend on any Gastown role existing. | Resolved-config tests for fresh cities, partial test configs, and controller-only operation. |
+-| AC3 | Pack resolution is deterministic across required Core, provider-conditioned support packs such as `bd` and `dolt`, root pack imports, city imports, default rig imports, locked remotes, cached remotes, system packs, and local overlays. User imports may not shadow required pack identity without an explicit collision diagnostic. | Pack-resolution matrix tests covering precedence, collisions, lock/cache provenance, and provider-conditioned support-pack cases. |
+-| AC4 | Fresh Gastown init imports the public Gastown pack explicitly from `https://github.com/gastownhall/gascity-packs.git//gastown` with a pinned version and default rig import. It must not rely on in-tree examples, `.gc/system/packs/gastown`, or implicit Maintenance. | Command verification for `gc init --template gastown`, lock/cache inspection, and absence checks for retired fallback paths. |
+-| AC5 | Maintenance is retired as a standalone active pack. It is not bundled, public-source recognized, auto-included, materialized as an active system pack, or presented as an implicit dependency. Legitimate non-pack uses of the word "maintenance" remain allowed. | Builtin/materialization tests, import-state checks, source alias tests, and docs/terminology audit. |
+-| AC6 | A validated asset migration ledger exists outside this requirements document before implementation approval. The ledger records current path, provenance, target owner, target output path or retirement action, split boundary, fallback classification, rationale, and proof command. It fails on missing current paths, unrepresented active source files, unresolved `review` rows, and duplicated or orphaned split behavior. | Ledger generation/validation command plus checked artifact in the plan or implementation context. |
+-| AC7 | A behavior-preservation manifest or harness exists before implementation approval. It covers supported Gastown formulas, orders, scripts, prompts, template variables, notification targets, requester/detector relationships, success/warning/failure/escalation paths, and recovery flows. | Behavior manifest validation plus runtime or command checks that external Gastown workflows load, render, trigger, and deliver expected notifications. |
+-| AC8 | Core role neutrality is enforced across Go production code, Core assets, formulas, orders, prompts, provider overlays, generated/materialized metadata, and route targets. Literal Gastown role names and literal `dog` routing are prohibited except for documented configured-default data, migration docs, generated review artifacts, and absence-test fixtures. | Absence-scan test with explicit denied tokens, scan roots, allowed paths, positive controls, and negative controls. |
+-| AC9 | The Core maintenance executor contract is configurable. Core may ship a default maintenance executor named `dog` as pack configuration, but Go code and SDK infrastructure must treat it as user-supplied config. Renamed, replaced, omitted, or disabled executors are handled through configuration and diagnostics, not hardcoded role logic. | Config tests for default, renamed, omitted, and disabled executor cases; Go-source scan for role special-casing. |
+-| AC10 | Existing-city migration diagnostics cover legacy local imports, stale system packs, public pins/caches, custom local overlays, duplicate Core, retired Maintenance, missing Core, version skew between Gas City and public Gastown, rollback expectations, and in-flight runtime state. Repair is report-only by default; any mutation requires an explicit non-interactive operator action and is idempotent. | Upgrade matrix tests, JSON/text golden outputs, repair idempotence checks, read-only config tests, and post-repair verification. |
+-| AC11 | Doctor/import-state output identifies the exact resolved config source or nested import that caused a missing-Core or retired-path condition. Text output is operator-readable; JSON output is structured for automation; neither mode prompts interactively or hides errors by substituting defaults. | Golden-output tests for text and JSON, nested-import attribution tests, read-only handling tests, and duplicate-Core prevention tests. |
+-| AC12 | Documentation, examples, CLI help, doctor messages, and import-state output consistently describe Core as required, Gastown as external/optional unless the user chooses the Gastown template, and the Maintenance pack as retired. They do not present `packs/maintenance`, `packs/gastown`, `examples/gastown/packs/*`, or `.gc/system/packs/*` as authoritative current sources except in migration/history contexts. | Docs/examples/help grep or generated audit artifact with allowed archive and migration-history exceptions. |
+-| AC13 | Legacy tests that asserted implicit Maintenance or in-tree Gastown behavior are either removed with explicit replacement coverage or rewritten to prove required Core plus explicit external Gastown imports. | Coverage-transfer table mapping old tests to new tests, command checks, absence scans, or manual checks. |
+-| AC14 | Public Gastown validation is part of acceptance. A local in-tree copy cannot mask a broken external pack: the public pack checkout or pinned cache must prove the roles, prompts, commands, formulas, orders, overlays, and checks needed by supported Gastown templates. | Cross-repo or pinned-cache validation command documented in the implementation plan and run in CI or as an explicit release gate. |
++| AC2 | Core is represented as required runtime behavior in resolved config for real cities, with trusted provenance and a clear dev/test escape hatch if tests need to construct partial configs. Normal SDK infrastructure operations must not depend on any Gastown role existing. | Resolved-config tests for fresh cities, partial test configs, and controller-only operation. |
++| AC3 | Pack resolution is deterministic across required Core, provider-conditioned support packs such as `bd` and `dolt`, root pack imports, city imports, default rig imports, locked remotes, cached remotes, system packs, and local overlays. User imports may not shadow required pack identity without an explicit collision diagnostic. | Pack-resolution matrix tests covering precedence, collisions, lock/cache provenance, materialization, stale system packs, and provider-conditioned support-pack cases. |
++| AC4 | Fresh Gastown init imports the public Gastown pack explicitly from `https://github.com/gastownhall/gascity-packs.git//gastown` with an immutable `sha:` pin and default rig import. It must not rely on in-tree examples, `.gc/system/packs/gastown`, bundled synthetic public aliases, or implicit Maintenance. | Command verification for `gc init --template gastown`, lock/cache inspection, public-pack proof, and absence checks for retired fallback paths. |
++| AC5 | Maintenance is retired as a standalone active pack. It is not bundled, public-source recognized, auto-included, materialized as an active system pack, selected by lock refresh, or presented as an implicit dependency. Legitimate non-pack uses of the word "maintenance" remain allowed. | Builtin/materialization tests, import-state checks, source alias tests, lock/cache tests, and docs/terminology audit. |
++| AC6 | A validated asset migration ledger exists as a shared release artifact for Gas City and `gascity-packs/gastown` before implementation approval. The ledger has a named path in the plan's support artifacts, a generator or validator command, an owner, a deterministic source snapshot, closed classification vocabulary, current path, provenance, target owner, all target output paths or retirement actions, split boundary, fallback classification, rationale, and proof command. It fails on missing current paths, unrepresented active source files, unresolved `review` rows, phantom rows, basename collisions, duplicated or orphaned split behavior, and stale source snapshots. | Ledger generation/validation command plus checked artifact, source-snapshot proof, and bidirectional source-to-ledger and ledger-to-output validation. |
++| AC7 | A behavior-preservation manifest or harness exists as a shared release artifact before implementation approval. It records the authoritative supported-Gastown baseline and covers formulas, orders, scripts, prompts, template variables, notification targets, requester/detector relationships, identity side effects, success/warning/failure/escalation paths, and recovery flows. It must trace AC6 rows to external Gastown successors or intentional retirements. | Behavior manifest validation plus executable runtime or command checks that the external Gastown pack loads, resolves, renders, triggers, routes, notifies, and exercises failure/recovery paths with in-tree fallback disabled. |
++| AC8 | Core role neutrality is enforced across Go production code, Core assets, formulas, orders, prompts, provider overlays, generated/materialized metadata, route targets, and notification targets. Literal Gastown role names and literal `dog` routing are prohibited except for documented configured-default data, migration docs, generated review artifacts, and absence-test fixtures. | Absence-scan test with explicit denied tokens, scan roots, allowed paths, positive controls, negative controls, and generated/materialized output coverage. |
++| AC9 | The Core maintenance executor contract is configurable and non-essential for deterministic SDK infrastructure. Safety-critical, structural, and deterministic maintenance is controller-owned; optional LLM-executed maintenance uses symbolic configurable bindings. Core may ship a default configured executor named `dog` as pack data, but Go code and SDK infrastructure must treat it as user-supplied config. Renamed, replaced, omitted, or disabled executors are handled through configuration and diagnostics, not hardcoded role logic. | Config tests for default, renamed, omitted, and disabled executor cases; no-executor controller-only test; Go/source/generated scan for role special-casing and literal `dog` fallback. |
++| AC10 | Existing-city migration diagnostics cover legacy local imports, transitive third-party legacy imports, stale system packs, public pins/caches, custom local overlays, duplicate Core, retired Maintenance, missing Core, version skew between Gas City and public Gastown, rollback expectations, read-only imports, install failures, and in-flight runtime state. Repair is report-only by default; mutation requires an explicit non-interactive operator action through `gc doctor --fix --non-interactive` or a named replacement command documented in the release notes, and must be idempotent, atomic, resumable, and post-verified. | Upgrade matrix tests, JSON/text golden outputs, repair idempotence and resume checks, read-only config tests, live-session/controller refusal tests, stale directory guidance checks, and post-repair verification. |
++| AC11 | Doctor/import-state output identifies the exact resolved config source or nested import chain that caused a missing-Core, duplicate-Core, version-skew, or retired-path condition. Text output is operator-readable; JSON output is structured for automation; neither mode prompts interactively or hides errors by substituting defaults. Doctor and repair commands have a bootstrap-only diagnostic mode that can run when normal pack resolution is broken. | Golden-output tests for text and JSON, nested-import attribution tests, bootstrap-only diagnostic tests, read-only handling tests, duplicate-Core prevention tests, and stdout/stderr separation checks. |
++| AC12 | Documentation, examples, CLI help, doctor messages, and import-state output consistently describe Core as required, Gastown as external/optional unless the user chooses the Gastown template, and the Maintenance pack as retired. They do not present `packs/maintenance`, `packs/gastown`, `examples/gastown/packs/*`, or `.gc/system/packs/*` as authoritative current sources except in migration/history contexts. | Docs/examples/help grep or generated audit artifact with allowed archive and migration-history exceptions plus a terminology matrix distinguishing the retired Maintenance pack from store/supervisor maintenance language. |
++| AC13 | Legacy tests that asserted implicit Maintenance or in-tree Gastown behavior are either removed with explicit replacement coverage or rewritten to prove required Core plus explicit external Gastown imports. Every retired test file or assertion must map to replacement coverage or a documented deletion rationale. | Coverage-transfer table and validator that fails on unmapped retired assertions, plus command checks, absence scans, and replacement tests. |
++| AC14 | Public Gastown validation is part of acceptance. A local in-tree copy cannot mask a broken external pack: the public pack checkout or pinned cache must prove the roles, prompts, commands, formulas, orders, overlays, and checks needed by supported Gastown templates. Normal CI uses deterministic local fixtures or pinned caches; live public-network validation is a named release gate. | Cross-repo or pinned-cache validation command documented in the implementation plan, deterministic CI fixture checks, and explicit release-gate result. |
++| AC15 | The public Gastown pin and version-skew policy are explicit. `PublicGastownPackVersion`, the public pin ledger, packcompat proof, lock/cache provenance, and fresh-init output must agree on source, subpath, immutable commit, pack digest, and behavior-manifest digest. Branch or tag refs are fetchability metadata only. Old binary plus activation pin is unsupported and must fail closed with downgrade guidance; new binary plus old lock loads only for bootstrap diagnostics until repaired. | Pin-coherence gate, release matrix tests, immutable-`sha:` validation, old/new binary compatibility tests, and version-skew diagnostic golden outputs. |
++| AC16 | Offline and cache behavior for public Gastown is fail-closed and provenance-backed. Exact cache hits use only digest-verified ordinary repo-cache entries. Cache misses, stale aliases, missing subpaths, failed fetches, and digest mismatches fail closed with actionable diagnostics and never select embedded, in-tree, or retired synthetic content. Cache writes and promotions are atomic under concurrent commands. | Network-disabled offline tests, cache-hit/miss/digest-mismatch/stale-alias tests, promotion provenance checks, and concurrent promotion tests that prove temp-directory staging and atomic publication. |
++| AC17 | The proof plan maps AC1 through AC16 to concrete commands, tests, fixtures, artifacts, or manual checks before implementation approval. The proof plan includes gate placement for local CI, pre-commit, integration, release validation, and manual audit, and it names unfixable external prerequisites without letting implementation infer product policy. | Acceptance-to-proof matrix checked into the plan support artifacts and reviewed before decomposition. |
+ 
+ ## Out Of Scope
+ 
+@@ -112,23 +109,26 @@
+   locations.
+ - Treating Core as a new role system or adding framework-side decision logic
+   about role behavior.
++- Approving the implementation plan before the AC6, AC7, AC14, AC15, AC16, and
++  AC17 proof artifacts exist and pass.
+ 
+ ## Open Questions
+ 
+-<!-- REVIEW: added per requirements-schema-compliance-officer -->
++None. The product decisions from the prior draft are resolved as follows:
+ 
+-1. Who owns generating and maintaining the validated asset migration ledger
+-   required by AC6: Gas City only, `gascity-packs/gastown` only, or a shared
+-   release artifact across both repositories?
+-2. What command or release gate will produce the behavior-preservation manifest
+-   required by AC7, and where will the proof artifact live so both Gas City and
+-   public Gastown releases can consume it?
+-3. What is the supported version-skew window between the Gas City release that
+-   requires public Gastown and the `gascity-packs/gastown` commit pinned by
+-   fresh init?
+-4. For existing cities with in-flight sessions using prompts or formulas from
+-   retired paths, should the migration allow those sessions to finish with old
+-   materialized content, require an immediate restart after repair, or expose a
+-   separate operator decision?
+-5. What exact repair command or workflow will perform explicit config mutation
+-   after doctor/import-state reports missing Core or retired imports?
++- The AC6 asset migration ledger is a shared release artifact owned by the Gas
++  City migration, with required participation from `gascity-packs/gastown`
++  maintainers for Gastown-owned rows.
++- The AC7 behavior-preservation proof is a shared release artifact and release
++  gate that must validate the external public Gastown pack with in-tree fallback
++  disabled.
++- The supported version-skew window is limited to explicit compatibility and
++  activation pins. Old binary plus activation pin and new binary plus old lock
++  are fail-closed diagnostic states, not behavior-serving states.
++- Existing in-flight sessions using retired materialized content may finish only
++  until an operator starts mutation repair. Repair refuses while affected live
++  sessions or controllers are present, and no new work may load retired paths
++  after repair.
++- The repair surface is report-only by default. Mutating repair is an explicit
++  non-interactive operator action through `gc doctor --fix --non-interactive`
++  or a named replacement command documented in the release notes.

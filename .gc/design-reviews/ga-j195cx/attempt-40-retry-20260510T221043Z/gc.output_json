@@ -1,0 +1,171 @@
+{"personas":[{
+  "slug": "01-compiler-boundary-invariant",
+  "wave": 1,
+  "name": "Nadia Sorenson",
+  "mandate": "active binary ownership;normalized requirements;internal formula authority;ZFC and layering",
+  "questions": [
+    "Does the design keep the active Gas City binary as the only compiler decision-maker rather than letting formulas select implementations?",
+    "Is requirement normalization implemented in one internal/formula path so callers never check raw contract strings?",
+    "Are formula-v2 constructs validated in internal/formula while CLI, orders, sling, API, and convergence consume typed results?"
+  ],
+  "red_flags": [
+    "formula selects a compiler implementation at runtime",
+    "raw contract remains the canonical decision point",
+    "requirement checks duplicated across projections and drift"
+  ],
+  "questions_text": "Does the design keep the active Gas City binary as the only compiler decision-maker rather than letting formulas select implementations?;Is requirement normalization implemented in one internal/formula path so callers never check raw contract strings?;Are formula-v2 constructs validated in internal/formula while CLI, orders, sling, API, and convergence consume typed results?",
+  "red_flags_text": "formula selects a compiler implementation at runtime;raw contract remains the canonical decision point;requirement checks duplicated across projections and drift"
+},{
+  "slug": "02-contract-migration-guardian",
+  "wave": 1,
+  "name": "Elias Vega",
+  "mandate": "contract alias;existing formulas;deprecation window;warning reach",
+  "questions": [
+    "Do existing contract = graph.v2 formulas continue compiling through the migration window, including externally pinned packs?",
+    "Are conflicts between contract and requires detected deterministically with a hard validation error?",
+    "What measurable trigger and owner decide when the alias can be removed?"
+  ],
+  "red_flags": [
+    "legacy formulas fail abruptly",
+    "conflicting declarations are silently accepted",
+    "deprecation scheduled by calendar rather than remaining-usage evidence"
+  ],
+  "questions_text": "Do existing contract = graph.v2 formulas continue compiling through the migration window, including externally pinned packs?;Are conflicts between contract and requires detected deterministically with a hard validation error?;What measurable trigger and owner decide when the alias can be removed?",
+  "red_flags_text": "legacy formulas fail abruptly;conflicting declarations are silently accepted;deprecation scheduled by calendar rather than remaining-usage evidence"
+},{
+  "slug": "03-parser-validation-matrix",
+  "wave": 1,
+  "name": "Priya Zielinski",
+  "mandate": "requirement grammar;parser edge cases;v2 construct enforcement;test matrix",
+  "questions": [
+    "Does v0 reject unsupported expressions such as exact 2, >=2.1, empty strings, and malformed ranges unless explicitly allowed?",
+    "Are empty [requires] tables, unknown sibling keys, and unknown contract values covered in validation tests?",
+    "Do v2-only constructs fail when the compiler requirement is omitted, regardless of caller path?"
+  ],
+  "red_flags": [
+    "unknown ranges accepted silently",
+    "v2-only fields compile without a requirement",
+    "tests are hand-written per case and miss matrix combinations"
+  ],
+  "questions_text": "Does v0 reject unsupported expressions such as exact 2, >=2.1, empty strings, and malformed ranges unless explicitly allowed?;Are empty [requires] tables, unknown sibling keys, and unknown contract values covered in validation tests?;Do v2-only constructs fail when the compiler requirement is omitted, regardless of caller path?",
+  "red_flags_text": "unknown ranges accepted silently;v2-only fields compile without a requirement;tests are hand-written per case and miss matrix combinations"
+},{
+  "slug": "04-operator-diagnostics-gate",
+  "wave": 1,
+  "name": "Marta Hidalgo",
+  "mandate": "daemon formula_v2 gate;actionable errors;API CLI order consistency;warning rate limiting",
+  "questions": [
+    "When daemon.formula_v2 is false, do CLI exits, API responses, dashboard cards, and order events share the same actionable remedy?",
+    "Does the gate apply to normalized compiler requirements regardless of whether the source used requires or contract?",
+    "Are deprecation warnings emitted at a controlled cadence that will not flood poll-driven dispatch or CI logs?"
+  ],
+  "red_flags": [
+    "disabled-capability errors look like parse failures",
+    "dashboard and CLI give contradictory remedies",
+    "deprecation warnings fire on every resolve cycle"
+  ],
+  "questions_text": "When daemon.formula_v2 is false, do CLI exits, API responses, dashboard cards, and order events share the same actionable remedy?;Does the gate apply to normalized compiler requirements regardless of whether the source used requires or contract?;Are deprecation warnings emitted at a controlled cadence that will not flood poll-driven dispatch or CI logs?",
+  "red_flags_text": "disabled-capability errors look like parse failures;dashboard and CLI give contradictory remedies;deprecation warnings fire on every resolve cycle"
+},{
+  "slug": "05-caller-integration-inventory",
+  "wave": 2,
+  "name": "Yuki Patel",
+  "mandate": "caller rewrite;bd and native path alignment;in-flight molecule behavior;dead-code policy",
+  "questions": [
+    "Has every caller of declaresGraphV2Contract across sling, orders, dispatch, API, dashboard, and convergence moved to one shared helper?",
+    "Do bd-backed and native compiler paths interpret normalized requirements identically during the migration?",
+    "If formula_v2 changes while a v2-required wisp or molecule is in flight, is the compile/retry behavior defined?"
+  ],
+  "red_flags": [
+    "old and new requirement checks coexist indefinitely",
+    "bd fallback ignores requires",
+    "in-flight molecules enter an undefined state when the daemon flag changes"
+  ],
+  "questions_text": "Has every caller of declaresGraphV2Contract across sling, orders, dispatch, API, dashboard, and convergence moved to one shared helper?;Do bd-backed and native compiler paths interpret normalized requirements identically during the migration?;If formula_v2 changes while a v2-required wisp or molecule is in flight, is the compile/retry behavior defined?",
+  "red_flags_text": "old and new requirement checks coexist indefinitely;bd fallback ignores requires;in-flight molecules enter an undefined state when the daemon flag changes"
+},{
+  "slug": "06-rollout-sequencing-reviewer",
+  "wave": 2,
+  "name": "Lena Driscoll",
+  "mandate": "implementation order;rollback granularity;built-in pack compatibility;migration-window definition",
+  "questions": [
+    "Can each migration step land with main working, or does the plan require a flag day across parser, callers, and docs?",
+    "If caller replacement regresses dispatch, can that step be reverted without also reverting docs and built-in formulas?",
+    "Are built-in and example formulas updated in a release where older binaries still parse them, or is version lockstep required?"
+  ],
+  "red_flags": [
+    "built-in formulas switch syntax before compatibility support ships",
+    "rollback requires a multi-step revert",
+    "migration window lacks a measurable exit criterion"
+  ],
+  "questions_text": "Can each migration step land with main working, or does the plan require a flag day across parser, callers, and docs?;If caller replacement regresses dispatch, can that step be reverted without also reverting docs and built-in formulas?;Are built-in and example formulas updated in a release where older binaries still parse them, or is version lockstep required?",
+  "red_flags_text": "built-in formulas switch syntax before compatibility support ships;rollback requires a multi-step revert;migration window lacks a measurable exit criterion"
+},{
+  "slug": "07-pack-versioning-ecosystem",
+  "wave": 2,
+  "name": "Saoirse Raman",
+  "mandate": "pack revision boundary;external author workflow;pinning and reproducibility;lint surface",
+  "questions": [
+    "Does the design clearly remove formula-level artifact semver while preserving pack semver, refs, and SHAs as the reproducibility boundary?",
+    "What happens for external packs pinned by SHA that copy current contract examples?",
+    "Is there a gc formula validate or lint path that tells pack authors exactly how to migrate stale snippets?"
+  ],
+  "red_flags": [
+    "version becomes de facto formula semver",
+    "external pack authors only get a changelog note",
+    "layer winners cannot be tied back to pack revision"
+  ],
+  "questions_text": "Does the design clearly remove formula-level artifact semver while preserving pack semver, refs, and SHAs as the reproducibility boundary?;What happens for external packs pinned by SHA that copy current contract examples?;Is there a gc formula validate or lint path that tells pack authors exactly how to migrate stale snippets?",
+  "red_flags_text": "version becomes de facto formula semver;external pack authors only get a changelog note;layer winners cannot be tied back to pack revision"
+},{
+  "slug": "08-docs-dx-terminology",
+  "wave": 3,
+  "name": "Avery Brooks",
+  "mandate": "documentation consistency;TOML user experience;terminology clarity;open question closure",
+  "questions": [
+    "Do docs/reference/formula.md, tutorials, architecture docs, and examples all teach requires as the canonical surface in the same change?",
+    "Is there one glossary-level distinction between capability, implementation, contract, schema, and pack revision?",
+    "Should the open questions about exact values, warning transport, and legacy version be resolved before shipping?"
+  ],
+  "red_flags": [
+    "docs continue recommending version or contract after behavior changes",
+    "requires is overloaded with another pack concept without explanation",
+    "open questions remain live at merge with user-visible consequences"
+  ],
+  "questions_text": "Do docs/reference/formula.md, tutorials, architecture docs, and examples all teach requires as the canonical surface in the same change?;Is there one glossary-level distinction between capability, implementation, contract, schema, and pack revision?;Should the open questions about exact values, warning transport, and legacy version be resolved before shipping?",
+  "red_flags_text": "docs continue recommending version or contract after behavior changes;requires is overloaded with another pack concept without explanation;open questions remain live at merge with user-visible consequences"
+},{
+  "slug": "09-convergence-subset-reviewer",
+  "wave": 3,
+  "name": "Felix Berger",
+  "mandate": "convergence validator;subsystem coupling;formula subset drift;daemon gate coverage",
+  "questions": [
+    "Does internal/convergence/formula.go preserve and validate [requires] instead of dropping it from the subset?",
+    "If a convergence formula needs v2 capability, does convergence respect daemon.formula_v2 through the same path as dispatch?",
+    "Does adding [requires] reduce top-level key sprawl or create another precedent for subsystem-specific formula subsets?"
+  ],
+  "red_flags": [
+    "convergence silently drops [requires]",
+    "v2 capability gate is bypassed by convergence",
+    "convergence and canonical formula validation continue to drift"
+  ],
+  "questions_text": "Does internal/convergence/formula.go preserve and validate [requires] instead of dropping it from the subset?;If a convergence formula needs v2 capability, does convergence respect daemon.formula_v2 through the same path as dispatch?;Does adding [requires] reduce top-level key sprawl or create another precedent for subsystem-specific formula subsets?",
+  "red_flags_text": "convergence silently drops [requires];v2 capability gate is bypassed by convergence;convergence and canonical formula validation continue to drift"
+},{
+  "slug": "10-future-capability-architect",
+  "wave": 3,
+  "name": "Ibrahim Park",
+  "mandate": "future capability ranges;reserved requirement axes;minimal abstraction;unknown key policy",
+  "questions": [
+    "Does the string grammar leave room for future compiler capability ranges without committing to full semver in v0?",
+    "Are omitted, >=1, and >=2 semantics defined tightly enough to avoid accidental divergence later?",
+    "Are unknown keys under [requires] rejected or reserved in a way that can support future axes such as tools, pack format, or runtime?"
+  ],
+  "red_flags": [
+    "v0 grammar blocks future capability growth",
+    "omitted and >=1 diverge accidentally",
+    "unsupported requirement axes are silently ignored"
+  ],
+  "questions_text": "Does the string grammar leave room for future compiler capability ranges without committing to full semver in v0?;Are omitted, >=1, and >=2 semantics defined tightly enough to avoid accidental divergence later?;Are unknown keys under [requires] rejected or reserved in a way that can support future axes such as tools, pack format, or runtime?",
+  "red_flags_text": "v0 grammar blocks future capability growth;omitted and >=1 diverge accidentally;unsupported requirement axes are silently ignored"
+}]}

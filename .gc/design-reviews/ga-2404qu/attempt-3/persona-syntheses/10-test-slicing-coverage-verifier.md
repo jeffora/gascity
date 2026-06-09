@@ -1,0 +1,42 @@
+# Tomas Park
+
+**Persona verdict:** block
+
+**Sources:** Claude, Codex, DeepSeek
+
+**Consensus findings:**
+- **[Blocker] `test/packcompat` is the linchpin behavior-preservation gate, but it is not yet specified tightly enough to gate the migration.** All reviewers agree the design relies on `TestPinnedPublicGastownBehavior` before Gas City can stop owning Gastown behavior, yet the test package does not exist in the live tree and the design leaves critical details open: hermetic execution versus live network clone, per-inventory-row executed assertions versus narrative/table completeness, and required cadence across slices. The gate must run before the first slice that depends on public-pack behavior and remain green at every slice boundary it protects.
+- **[Blocker] Slice 5 can create a duplicate-order window while Maintenance assets are folded into Core.** Claude and DeepSeek verified that Maintenance currently supplies orders that the slice plans to move into Core, while Maintenance remains included until the retirement table is applied. Existing scan/name tests can still pass with duplicate active sources. The design must require the Core asset addition, Maintenance include removal, and related test rewrites to land atomically, with a named assertion that no order name resolves from two packs during the fold.
+- **[Blocker] The test migration matrix is not broad enough to protect source deletion.** Codex and DeepSeek agree the deletion slice needs a hard gate tying every removed Gas City example test to a replacement assertion, retained SDK/public-import fixture, or explicit removal decision. DeepSeek adds that the current matrix names only two `examples/gastown` test files while the tree has additional test files, including import-wiring coverage that is directly relevant to this migration.
+- **[Major] Slice 5 gates are behavior-shaped but not executable enough.** The design uses categories such as formula/order/script behavior, stale directory preservation, runtime-state diagnostics, and provider pack continuity, but does not name the exact packages, `-run` patterns, or behavior assertions. These gates need concrete commands and assertions so reviewers and implementers can verify slice boundaries.
+- **[Major] Review-marked ownership decisions need preflight enforcement before move/delete slices consume them.** Codex and DeepSeek agree the design says unresolved audits must be resolved, but this must be a preflight gate over each slice asset list before source moves begin, not just an ownership discipline or final cleanup expectation.
+- **[Major] Existing include and order tests are too count/name oriented for this migration.** Claude and DeepSeek identify `len(includes) == N` assertions that should become set-membership/absence assertions for Core, `bd`, and retired Maintenance. DeepSeek also notes that order-name presence checks and labels should prove Core ownership and avoid treating `scanAllOrders` as sufficient composition coverage.
+- **[Major] Runtime-state and doctor/import provenance paths are underspecified.** DeepSeek identifies specific migration risks around `.gc/runtime/packs/maintenance` state paths, `GC_PACK_STATE_DIR` dispatch wiring, and distinguishing embedded-legacy `.gc/system/packs/gastown` from a public installed pack. Slice 5's diagnostics and slice 6 alias/provenance work need to name these targets explicitly.
+- **[Minor] The per-slice gate lists need to restate or prove broad coverage.** Reviewers noted ambiguity where slices 3-6 omit explicit `make test-fast-parallel` or `go test ./examples/...` entries. The global invariant is good, but the detailed slice gates should not leave readers guessing whether example behavior is covered.
+
+**Disagreements:**
+- Claude rates the duplicate-order window as **major**, while DeepSeek rates it **blocker**. I treat it as blocker because all sources agree the migration can create duplicate active order definitions and existing tests may still pass; that is exactly the kind of non-green or behavior-doubled intermediate this lane is responsible for preventing.
+- Claude calls the include-count issue **minor**, while DeepSeek calls it **major**. I treat it as major because seven migration-sensitive count assertions can produce misleading passes or failures during the Core/Maintenance include change.
+- Codex focuses on moving the exact-public-pin compatibility proof earlier than Slice 6, while Claude and DeepSeek emphasize missing hermeticity, per-row enforcement, and cadence. These are complementary, not contradictory: the design needs both a precise test contract and placement at the first dependent slice.
+- DeepSeek adds several concrete live-tree risks not present in the other reviews: incomplete coverage of all `examples/gastown` test files, `jsonl_archive_doctor_check.go` state paths, `GC_PACK_STATE_DIR` dispatch wiring, `legacyPublicPackForSource` provenance, and role-stripping-sensitive script-content needles. These should be treated as actionable lane findings unless a subsequent design revision provides counter-evidence.
+
+**Missing evidence:**
+- Whether `TestPinnedPublicGastownBehavior` will run hermetically in CI, and whether it executes formula composition, order resolution, hook resolution, configured-agent loading, and moved scripts for every behavior inventory row.
+- The exact slice cadence for `test/packcompat`, especially the first slice that changes Gas City's dependency on the public Gastown pack and every later slice that depends on that proof.
+- A complete test migration matrix for all `examples/gastown` test files and test functions, including import-wiring and script tests outside the two currently named files.
+- Concrete package/test targets for Slice 5 behavior, stale generated directory preservation, runtime-state diagnostics, and provider pack continuity.
+- The migration target for `.gc/runtime/packs/maintenance`, including doctor fallback paths and `GC_PACK_STATE_DIR` dispatch wiring after Maintenance is retired.
+- The provenance signal used to distinguish embedded legacy Gastown materialization from a public installed Gastown pack under `.gc/system/packs/gastown`.
+- A concrete formula-composition test pattern that creates molecules, asserts step counts and hook targets, and resolves configured agents through normal config/system wrapper paths.
+- Whether `make test-fast-parallel` covers `go test ./examples/...`; if not, the focused slice gates need to list `go test ./examples/...` explicitly.
+
+**Required changes:**
+- Define `test/packcompat` as a hermetic, executable, per-row behavior gate. It must prove the exact public Gastown pin preserves every behavior edge Gas City is about to stop owning, and it must be required before the first dependent public-pack slice and at every protected slice boundary.
+- Make Slice 5 atomic for the Maintenance fold: Core asset addition, Maintenance include removal, `embed_builtin_packs_test.go` path/script/include rewrites, and `controller_test.go` order-ownership updates must land together, with a zero-duplicate-order assertion.
+- Expand the test migration matrix to cover every `examples/gastown` test file and function. The source-deletion slice must fail if any removed test lacks a replacement test command, retained Gas City fixture, or explicit intentional-removal decision.
+- Replace generic Slice 5 gate labels with concrete package targets, named tests, and behavior assertions for formulas/orders/scripts, stale directory preservation, runtime state, and provider pack continuity.
+- Add a preflight ownership-resolution gate for every move/delete slice that enumerates all in-scope assets and fails on unresolved REVIEW/ownership state before source moves occur.
+- Convert include-count and order-name tests into ownership-aware behavior tests: assert Core membership, Maintenance absence, retired synthetic alias rejection, and actual formula/molecule/hook/configured-agent behavior rather than only names or counts.
+- Specify and test runtime-state path migration, including `jsonl_archive_doctor_check.go`, `GC_PACK_STATE_DIR` dispatch wiring, and script-content checks that remain meaningful after role-specific paths are stripped.
+- Specify how `legacyPublicPackForSource` distinguishes embedded legacy sources from public installed sources after synthetic alias removal.
+- Add `go test ./examples/...` to slices 3-6 or explicitly prove that the sharded fast gate already runs it.

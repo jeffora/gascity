@@ -1,0 +1,76 @@
+--- .gc/design-reviews/ga-unpr2y/attempt-12/design-before.md	2026-06-07 17:41:51.401768289 +0000
++++ internal/session/DESIGN.md	2026-06-07 19:35:30.334076285 +0000
+@@ -5,7 +5,7 @@
+ | Status | Draft backlog |
+ | Behavior source | `REQUIREMENTS.md` |
+ | Scope | Technical architecture and extraction plan for session ownership |
+-| Latest design-review disposition | Attempt 10 global verdict `block`; this revision is an `iterate` response |
++| Latest design-review disposition | Attempt 12 global verdict `block`; this revision is an `iterate` response |
+ 
+ This document tracks the technical design for moving session behavior toward a
+ clearer ownership boundary. It is intentionally separate from
+@@ -665,6 +665,64 @@
+ remaining blockers, keeps decomposition in iterate mode, and limits the next
+ implementation pass to the non-mutating Slice 0 artifact and guard bead.
+ 
++## Attempt 12 Review Response
++
++<!-- REVIEW: added per attempt-12-global-synthesis -->
++
++Attempt 12 still blocks decomposition. This revision keeps
++`design_review.verdict=iterate` and tightens the only schedulable work into one
++non-mutating Slice 0 artifact-and-guard bead. No behavior-moving bead may be
++created from this design until Slice 0 lands the concrete artifacts below,
++validates them against checked-in schemas, and proves every validator fails on
++missing, stale, empty, broad, or unowned evidence.
++
++Authoritative Slice 0 backlog item:
++
++| Field | Required content |
++|---|---|
++| Bead title | `Slice 0: session-boundary executable preflight` |
++| Scope | Non-mutating ledgers, source inventories, schema files, validators, guard fixtures, proof transcripts, and workflow close validation only. |
++| Artifact root | `internal/session/` plus guard fixtures under `cmd/gc/testdata/session_boundary_guard/`. |
++| Fixed artifacts | `SLICE0_BASELINE.md`, `BOUNDARY_INVENTORY.md`, `SESSION_BOUNDARY_SYMBOLS.yaml`, `SCENARIO_PARITY.yaml`, `VOCABULARY_CHECKPOINTS.yaml`, `DIAGNOSTICS_MANIFEST.yaml`, `COMMAND_APPLIERS.yaml`, `BOUNDARY_MATRIX.yaml`, `API_CLI_ROUTE_INVENTORY.yaml`, `SLICE0_PROOF.md`, guard allowlist, guard fixtures, and validator tests. |
++| Schemas | `internal/session/testdata/slice0_schemas/session_boundary_symbols.schema.json`, `scenario_parity.schema.json`, `vocabulary_checkpoints.schema.json`, `diagnostics_manifest.schema.json`, `command_appliers.schema.json`, `boundary_matrix.schema.json`, `api_cli_route_inventory.schema.json`, and `guard_allowlist.schema.json`. |
++| Validators | `TestSessionBoundaryInventoryFresh`, `TestSlice0Artifacts`, `TestScenarioParityFreshness`, `TestVocabularyCheckpoints`, `TestSessionDiagnosticsManifest`, `TestSessionCommandApplierLedger`, `TestSessionBoundaryMatrix`, `TestSessionRouteInventoryFresh`, and `TestSessionBoundaryGuard`. |
++| Negative fixtures | Fixture files for raw store writes, dynamic metadata batches, patch-map extension and application, helper-returned patches, direct manager methods, package mutators, raw type/status mutation, generic bridge writes, subprocess `bd` mutation, Huma/legacy API bypasses, CLI manager construction, zero-match inventories, stale proof paths, expired allowlist rows, undeclared vocabulary, missing diagnostic renderers, and route rows without parity fixtures. |
++| Closure condition | Every YAML artifact validates against its schema, every `SESSION-*` row has one parity row, every production non-test/non-generated Go file under `cmd/` and `internal/` is scanned or exactly excluded, every allowlist row has owner/reason/expiry/source hit/retirement proof, every API/CLI route row has output-contract proof, every command-applier row names its write primitive and recovery matrix, and every validator reports at least one intended match. |
++| Proof command | `go test ./cmd/gc ./internal/session ./internal/api ./internal/events -run 'TestSessionBoundaryGuard|TestSessionBoundaryInventoryFresh|TestSlice0Artifacts|TestScenarioParityFreshness|TestVocabularyCheckpoints|TestSessionDiagnosticsManifest|TestSessionCommandApplierLedger|TestSessionBoundaryMatrix|TestSessionRouteInventoryFresh|TestEveryKnownEventTypeHasRegisteredPayload' -count=1` |
++| CI/pre-commit proof | Slice 0 must either wire the proof command into the local pre-commit/CI path or record the exact CI job and pre-commit transcript in `SLICE0_PROOF.md`. A hook or CI command that skips because files are absent is a failure. |
++| Hard scheduling rule | Formula decomposition may create only this Slice 0 bead until it closes. Every later mutation-owning, resolver-adopting, repair-writing, event-payload, API-wire, reconciler-policy, runtime-start, close/retire, wake/drain, diagnostic-expansion, or performance-sensitive bead must depend on the closed Slice 0 bead and cite the artifact row IDs it consumes. |
++
++Attempt 12 blockers are applied as hard gates:
++
++| Finding | Design response | Exit gate |
++|---|---|---|
++| Slice 0 is not schedulable or machine-checkable. | Slice 0 is one backlog item with a fixed artifact list, schema paths, validator names, negative fixtures, one proof command, pre-commit/CI proof, and a hard dependency rule. | The Slice 0 bead cannot close unless the checked-in validators fail on missing artifacts, stale paths, zero matches, unowned writers, absent parity rows, undeclared vocabulary, missing diagnostics, route rows without output proof, and broad allowlist exceptions. |
++| Mutation ownership and one-writer proof are not enforceable. | `SESSION_BOUNDARY_SYMBOLS.yaml` and `BOUNDARY_INVENTORY.md` must be generated from all production non-test, non-generated Go files under `cmd/` and `internal/`, split by path, symbol, receiver, helper chain, key family, exact key or dynamic-key source, target-bead proof, owner slice, exception status, expiry, and retirement test. Broad doctor, repair, migration, API/Huma, generic bridge, manager, package-mutator, endpoint-family, and command-factory exemptions are invalid unless expanded into exact rows. | `TestSessionBoundaryInventoryFresh` and `TestSessionBoundaryGuard` fail on any unmapped production writer, any allowlist row without owner/expiry/retirement/source hit, any new direct manager or package-mutator call, and any session-owned key with two production writers after a slice claims ownership. Repair and backfill writers must be scheduled either as a named repair slice or folded into the owning command slice before behavior moves. |
++| Behavior parity and target semantics are not pinned to live proof. | `SCENARIO_PARITY.yaml` is the only bead-generation source for requirements rows, and `API_CLI_ROUTE_INVENTORY.yaml` is the only source for route/command output compatibility. The baseline is pinned from a clean checkout in `SLICE0_BASELINE.md`; commit hashes are historical support only unless current tests or source paths exist. Target classification stays raw evidence; per-surface adapters own selection, materialization, repair, fallthrough, and output. | Freshness tests fail when any `SESSION-*` row lacks a parity row, any proof path is stale, any proof command matches zero tests, any route/command lacks status/body/stdout/stderr/JSON/exit-code/request-ID proof, or any surface delegates without same-token collision fixtures for IDs, aliases, path aliases, configured names, historical aliases, materialization, repair-on-read, and error fallthrough. |
++| Atomicity, close/runtime recovery, and event contracts have crash windows. | `COMMAND_APPLIERS.yaml` is mandatory before delegation. It has rows for runtime start, close, wake, drain, identity retirement, repair/backfill, and API command routes, each naming preconditions, validation point, write primitive, fence token or revision, stale-success classification, partial-state matrix, provider side-effect ordering, event/fact order, repair authority, and crash/race tests. Events remain thin diagnostics until a recorder/outbox migration is explicitly approved. | `TestSessionCommandApplierLedger` fails when an applier lacks store primitive coverage, stale-success handling, partial-state tests, provider compensation, or event ordering. Close/retire rows must include release identity snapshots, scanner owner, trigger predicate, query shape, cadence, idempotency key, supersession key, completion marker, duplicate-scan behavior, partial-query handling, restart behavior, and crash-after-stop/close tests. Event wording must report `event-emission-failed` only for observable recorder errors and use durable-scan outcomes for skipped or missed events. |
++| Decider, fact, and vocabulary boundaries can still become facades. | `BOUNDARY_MATRIX.yaml` is the machine-checkable owner map for wake, hold, sleep, drain, rollback, pool demand, provider health, progress, orphan release, runtime observation, repair, and target materialization decisions. `VOCABULARY_CHECKPOINTS.yaml` separates active next-slice vocabulary from provisional design-only bounds and names first production callers. Raw classifiers and pure deciders carry facts only, not caller policy or unused future fields. | `TestSessionBoundaryMatrix` fails when a row lacks session inputs, session output, adapter facts, controller policy owner, forbidden imports/facts, unknown/partial handling, and proof tests. `TestVocabularyCheckpoints` fails on unused fields, future-only exported types, flat optional envelopes, policy leakage into raw classifier/decider types, direct clock/store/runtime/config/event imports in pure decider files, or missing first-caller evidence. |
++
++Attempt 12 major findings are applied as route and diagnostics gates:
++
++| Finding | Design response | Exit gate |
++|---|---|---|
++| API, CLI, dashboard, and worker-boundary compatibility need route-level proof. | `API_CLI_ROUTE_INVENTORY.yaml` inventories every session-affecting Huma handler, legacy API route, CLI command, local `apiClient()` fallback, generated-client wrapper, dashboard/SSE surface, current mutator, response/output contract, owner slice, exception row, expiry, and parity fixture. API and CLI remain projections over the object model; they do not reimplement raw lifecycle metadata decisions. | `TestSessionRouteInventoryFresh` fails when a route or command is absent, when an exception lacks expiry, when a wrapper lacks generated-client/OpenAPI impact notes, when a CLI fallback lacks stdout/stderr/JSON/exit-code proof, or when a touched API/schema/dashboard path lacks the root `make dashboard-check` proof. |
++| Diagnostics and performance budgets are not executable. | `DIAGNOSTICS_MANIFEST.yaml` is normative for operation IDs, check IDs, owners, trace outcomes, wake causes, blockers, committed fact fields, redaction keys, renderer surfaces, golden tests, event relationships, cost classes, query/subprocess budgets, subscriber caps, and large-city baselines. Command-local diagnostic strings are not shared contracts unless registered there. | `TestSessionDiagnosticsManifest` fails when an operation/check/result lacks owner, renderer, redaction, event relationship, or cost class. Golden trace/doctor/inspect/API/CLI tests and query/subprocess budget tests are required before a slice can claim diagnostics or performance proof. A benchmark or query-count command that matches no fixture is a failure. |
++
++Unfixable in this document:
++
++- The attempt-12 persona-output paths and model labels are workflow formula
++  defects, not `internal/session` design defects. The design-review workflow
++  must write persona syntheses under the active `$ATTEMPT_DIR` or provide a
++  source manifest, and it must use consistent model labels for artifacts and
++  synthesis. This design records the defect but cannot repair the workflow
++  artifact writer from `internal/session/DESIGN.md`.
++
++This revision does not approve any behavior-moving work. It addresses the
++attempt-12 blocker and major findings by making the next work an executable
++Slice 0 preflight and by requiring later beads to cite its concrete artifact
++rows before they can move session behavior.
++
+ ## Product Rule
+ 
+ Technical refactors must preserve the behavior in `REQUIREMENTS.md` unless code

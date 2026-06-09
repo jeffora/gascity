@@ -1,0 +1,29 @@
+# Yuki Patel - Codex
+
+**Verdict:** block
+
+**Top strengths:**
+- The design now puts `internal/formula` at the center of requirement interpretation and requires behavioral callers to consume `CompileResult`/`NormalizedRequirements` instead of re-checking raw `contract`, `requires.formula_compiler`, or `gc.formula_contract`.
+- The caller migration table is much more actionable than the earlier proposal: sling, orders, API, convoy/source-workflow predicates, convergence, graphroute, dashboard types, and static raw-consumer guards are all called out with target APIs and tests.
+- The in-flight behavior section gives the right high-level rule: existing graph workflow roots continue from persisted metadata after `[daemon] formula_v2` changes, while any action that compiles a new formula must preflight against the current host capability before durable writes.
+
+**Critical risks:**
+- [Blocker] The executable caller inventory still omits the dispatch fanout expansion-fragment path. The design says every caller that can create an "expansion fragment" must use `CompileWithResult` before durable writes, but the concrete migration table does not name `internal/dispatch/fanout.go` or the `formula.CompileExpansionFragment` API. Current code compiles fanout fragments at `internal/dispatch/fanout.go:129`, and `internal/formula/fragment.go:116` still checks `isGraphWorkflow(resolved, IsFormulaV2Enabled())`. That path can create fragment beads during control dispatch, so it needs the same normalized requirement preflight, host-capability snapshot, diagnostics, and zero-partial-write tests as sling/order/convergence.
+- [Major] The bd fallback/native parity rule is not executable for external or local user formulas that are already requires-only. The compatibility gate says `GC_NATIVE_FORMULA=false` or bd shell-out must either preserve dual `contract` declarations or prove bd parses `[requires]` identically before source conversion, but the public matrix also says a new binary with `[requires] formula_compiler = ">=2"` works. If fallback remains available, a new Gas City preflight can accept a requires-only graph formula while the bd path ignores `[requires]`, fails to mark graph metadata, or diverges from the normalized diagnostics. The design needs a hard runtime policy for this case, not only a first-party source-conversion gate.
+- [Major] The dead-code policy is directionally correct but lacks an explicit deletion checkpoint for old behavior. `SetFormulaV2Enabled`/`IsFormulaV2Enabled`, raw `Contract` readers, legacy `Compile` wrappers, `GC_NATIVE_FORMULA=false`, and `Store.MolCook*` are all described as temporary or compatibility behavior in different sections, but the rollout plan does not name the phase where each one becomes illegal outside a narrow allowlist. That leaves room for old and new requirement checks to coexist indefinitely.
+
+**Missing evidence:**
+- A generated or checked-in call-site inventory showing every production use of `Compile`, `CompileWithoutRuntimeVarValidation`, `CompileExpansionFragment`, `IsCompiledGraphWorkflow`, `IsWorkflowRoot`, `gc.formula_contract`, `declaresGraphV2Contract`, and `Requires.FormulaCompiler`, with each entry mapped to a migration row or a documented allowlist.
+- A bd fallback decision table for requires-only graph formulas from external/local packs: accepted, rejected with a diagnostic, converted through dual metadata by Gas City, or unsupported while fallback is active.
+- Tests that prove fanout/scope fragment compilation with disabled host capability creates no child beads, and that already-created graph workflows keep dispatching after the flag is disabled while retry/on_complete fanout that compiles a new formula fails before creating a fragment.
+
+**Required changes:**
+- Add an executable migration row for `internal/dispatch/fanout.go` and `formula.CompileExpansionFragment`. Either introduce `CompileExpansionFragmentWithResult` or define how `CompileWithResult` covers rootless fragments; require host-capability input, shared diagnostics, graph metadata from normalized requirements, and fault/no-partial-write tests.
+- Specify fallback semantics for `GC_NATIVE_FORMULA=false` and any bd-backed path. If bd cannot parse `[requires]` identically, Gas City must reject requires-only graph formulas on that path with a typed diagnostic before durable writes, or must prove that Gas City-owned preflight and metadata stamping make bd's parser ignorance harmless.
+- Add a dead-code/allowlist table to the rollout: after caller migration, no production code may read `IsFormulaV2Enabled`, `Contract`, `Requires.FormulaCompiler`, or `gc.formula_contract` except the parser, compatibility metadata writer, and shared persistence predicate; after fallback removal, delete `Store.MolCook*`, `GC_NATIVE_FORMULA=false`, and bd mol-cook integration; after alias removal, delete legacy `contract` normalization.
+- Extend the static guard requirements so they cover function calls and metadata query construction, not just string literals. The current production code has query and predicate paths that build behavior from `gc.formula_contract`; the guard needs an explicit allowlist and tests proving new consumers use canonical keys first.
+
+**Questions:**
+- Is a rootless expansion fragment supposed to produce a full `CompileResult` with `NormalizedRequirements`, `Diagnostics`, and `Provenance`, or should it have a fragment-specific result type?
+- When bd fallback is active and Gas City has already preflighted a formula, who writes the canonical root metadata: Gas City after bd returns the root, or bd during materialization?
+- Which component owns the host-capability snapshot for controller dispatch and fanout during config reload: the controller loop, `ProcessControl`, or the formula compile call itself?

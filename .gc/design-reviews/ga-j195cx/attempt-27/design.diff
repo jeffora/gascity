@@ -1,0 +1,567 @@
+--- .gc/design-reviews/ga-j195cx/attempt-27/design-before.md	2026-05-10 16:44:26.402137403 +0000
++++ engdocs/design/formula-compiler-requirements.md	2026-05-10 17:20:51.781086003 +0000
+@@ -165,9 +165,11 @@
+ 
+ Resolved public syntax choices:
+ 
+-- Exact `formula_compiler = "2"` is not accepted in v0.
+-- `">= 2"`, `" >=2"`, `">=2 "`, `">=2.0"`, `">=2.1"`, and `">=3"` are not
+-  accepted in v0.
++- Exact `formula_compiler = "2"` is invalid syntax in v0.
++- `">= 2"`, `" >=2"`, `">=2 "`, `">=2.0"`, and `">=2.1"` are invalid syntax
++  in v0.
++- `">=3"` is syntactically recognizable as a future monotonic minimum, but it
++  is unsupported until the binary implements compiler capability 3.
+ - `requires.formula_compiler` must be a TOML string. Integer, float, boolean,
+   array, table, and dotted-table values fail validation.
+ - An omitted `[requires]` table and an empty `[requires]` table both mean the
+@@ -212,10 +214,12 @@
+ 
+ 1. TOML decoding errors.
+ 2. Unknown `[requires]` keys and invalid TOML types.
+-3. Unsupported `requires.formula_compiler` expressions.
+-4. Legacy `contract` normalization and `contract`/`requires` conflicts.
+-5. Missing compiler requirement for v2-only constructs.
+-6. Host capability failures such as `[daemon] formula_v2 = false`.
++3. Malformed `requires.formula_compiler` syntax.
++4. Syntactically valid but unsupported future `requires.formula_compiler`
++   expressions.
++5. Legacy `contract` normalization and `contract`/`requires` conflicts.
++6. Missing compiler requirement for v2-only constructs.
++7. Host capability failures such as `[daemon] formula_v2 = false`.
+ 
+ Accepted TOML shape matrix:
+ 
+@@ -225,11 +229,12 @@
+ | empty `[requires]` table | default capability, source `omitted` | none |
+ | `[requires] formula_compiler = ">=1"` | default capability, source `requires` | none |
+ | `[requires] formula_compiler = ">=2"` | compiler capability 2, source `requires` | none when host satisfies it |
+-| `[requires] formula_compiler = ""` | none | `formula.compiler_requirement_unsupported` |
+-| `[requires] formula_compiler = "2"` | none | `formula.compiler_requirement_unsupported` |
+-| `[requires] formula_compiler = ">= 2"` | none | `formula.compiler_requirement_unsupported` |
+-| `[requires] formula_compiler = ">=2 "` or `" >=2"` | none | `formula.compiler_requirement_unsupported` |
+-| `[requires] formula_compiler = ">=2.0"` or `">=3"` | none | `formula.compiler_requirement_unsupported` |
++| `[requires] formula_compiler = ""` | none | `formula.compiler_requirement_invalid_syntax` |
++| `[requires] formula_compiler = "2"` | none | `formula.compiler_requirement_invalid_syntax` |
++| `[requires] formula_compiler = ">= 2"` | none | `formula.compiler_requirement_invalid_syntax` |
++| `[requires] formula_compiler = ">=2 "` or `" >=2"` | none | `formula.compiler_requirement_invalid_syntax` |
++| `[requires] formula_compiler = ">=2.0"` or `">=2.1"` | none | `formula.compiler_requirement_invalid_syntax` |
++| `[requires] formula_compiler = ">=3"` | none | `formula.compiler_requirement_unsupported_future` |
+ | `[requires] formula_compiler = 2`, `2.0`, `true`, `[]`, or `{}` | none | `formula.requirement_invalid_type` |
+ | `[requires.formula_compiler]` dotted or nested table | none | `formula.requirement_invalid_type` |
+ | `[requires] unknown_axis = "x"` | none | `formula.requirement_unknown_axis` |
+@@ -276,6 +281,7 @@
+ - requirement source (`omitted`, `requires`, `contract`, `dual`)
+ - raw TOML shape and raw value kind
+ - legacy `contract` state
++- legacy `version` state (`omitted`, `1`, `2`, or invalid type)
+ - v2 construct registry entry, including nested expansion/aspect source
+ - root formula versus contributed formula source
+ - host compiler capability
+@@ -296,6 +302,7 @@
+   requires_value:
+     [omitted, ">=1", ">=2", "", "2", ">= 2", " >=2", ">=2 ", ">=2.0", ">=2.1", ">=3"]
+   contract_value: [omitted, graph.v2, graph.v1, other]
++  version_value: [omitted, 1, 2, string, invalid_type]
+   host_capability: [1, 2, invalid]
+   formula_source: [root, child, loop_body, expansion, aspect, transitive_import]
+   v2_construct: [none, check, ralph, retry, on_complete, workflow_metadata_key, workflow_metadata_value]
+@@ -307,6 +314,7 @@
+       requires_shape: string
+       requires_value: ">=2"
+       contract_value: omitted
++      version_value: omitted
+       host_capability: 1
+       formula_source: root
+       v2_construct: retry
+@@ -329,33 +337,52 @@
+ The generator expands this dimension table and fails if any supported
+ combination lacks an explicit row or an explicit `unsupported` reason. Complete
+ coverage is required for accepted and rejected strings, every non-string
+-TOML/JSON value kind, legacy `contract`, dual declarations, invalid host
+-capability, each v2-only construct location, inherited inline children,
+-expansion/aspect/transitive-import contributions, normalized output, source
+-attribution, and diagnostic order/count. A reviewer must be able to add a new
+-requirement axis or v2-only construct and see exactly which matrix rows,
++TOML/JSON value kind, legacy `contract`, legacy `version`, dual declarations,
++invalid host capability, each v2-only construct location, inherited inline
++children, expansion/aspect/transitive-import contributions, normalized output,
++source attribution, and diagnostic order/count. A reviewer must be able to add
++a new requirement axis or v2-only construct and see exactly which matrix rows,
+ diagnostic fixtures, docs rows, and tests must change.
+ 
++<!-- REVIEW: added per legacy-version-bypass -->
++
++Legacy `version` is never a compiler requirement. The matrix must cross
++`version` omitted, `version = 1`, and `version = 2` with every v2-only
++construct and with omitted, empty-table, `>=1`, and `>=2` requirement states.
++All rows where a v2-only construct appears with only omitted/default
++requirements fail with `formula.compiler_requirement_missing`, regardless of
++whether legacy `version` is absent, `1`, or `2`. `version = 2` is preserved
++only as legacy metadata and may produce `formula.version_deprecated` on
++validation/display surfaces; it does not imply graph capability.
++
++Fixtures that currently expect `version = 1` plus a v2-only construct such as
++`[steps.check]` to compile as a legacy molecule are invalid under this design.
++They must be removed or rewritten to dual-declare `contract = "graph.v2"` and
++`[requires] formula_compiler = ">=2"` during the alias window. CI fails if any
++fixture, generated matrix row, or golden diagnostic preserves a path where
++legacy `version` satisfies or suppresses `requires.formula_compiler`.
++
+ `go generate ./internal/formula` regenerates the rendered matrix and the golden
+ diagnostic fixtures. CI fails when the generated Markdown table, golden
+ diagnostics, and fixture rows disagree.
+ 
+ Rendered validation matrix excerpt:
+ 
+-| `contract` | `[requires] formula_compiler` | V2-only construct | Host `formula_v2` | Result |
+-|---|---|---|---|---|
+-| omitted | omitted or empty table | no | either | default capability, no diagnostic |
+-| omitted | `>=1` | no | either | default capability, no diagnostic |
+-| omitted | `>=2` | no or yes | true | graph capability, no error |
+-| omitted | `>=2` | no or yes | false | `formula.compiler_requirement_unsatisfied` |
+-| omitted | omitted or `>=1` | yes | either | `formula.compiler_requirement_missing` |
+-| `graph.v2` | omitted | no or yes | true | graph capability plus `formula.contract_deprecated` |
+-| `graph.v2` | `>=2` | no or yes | true | graph capability, source `dual`, plus `formula.contract_deprecated` |
+-| `graph.v2` | `>=1` | no or yes | either | `formula.compiler_requirement_conflict` |
+-| other value | any | any | any | `formula.compiler_requirement_unsupported` on `contract` |
+-| omitted | unsupported string such as `2`, `>= 2`, `>=2.0`, `>=3`, or empty string | any | any | `formula.compiler_requirement_unsupported` |
+-| omitted | wrong TOML type, dotted table, or nested table | any | any | `formula.requirement_invalid_type` |
+-| omitted | unknown `[requires]` key | any | any | `formula.requirement_unknown_axis` |
++| `contract` | legacy `version` | `[requires] formula_compiler` | V2-only construct | Host `formula_v2` | Result |
++|---|---|---|---|---|---|
++| omitted | omitted, `1`, or `2` | omitted or empty table | no | either | default capability, optional `formula.version_deprecated` on validation/display |
++| omitted | omitted, `1`, or `2` | `>=1` | no | either | default capability, optional `formula.version_deprecated` on validation/display |
++| omitted | omitted, `1`, or `2` | `>=2` | no or yes | true | graph capability, no error except optional `formula.version_deprecated` |
++| omitted | omitted, `1`, or `2` | `>=2` | no or yes | false | `formula.compiler_requirement_unsatisfied` |
++| omitted | omitted, `1`, or `2` | omitted, empty table, or `>=1` | yes | either | `formula.compiler_requirement_missing` |
++| `graph.v2` | omitted, `1`, or `2` | omitted | no or yes | true | graph capability plus `formula.contract_deprecated`, optional `formula.version_deprecated` on validation/display |
++| `graph.v2` | omitted, `1`, or `2` | `>=2` | no or yes | true | graph capability, source `dual`, plus `formula.contract_deprecated`, optional `formula.version_deprecated` |
++| `graph.v2` | omitted, `1`, or `2` | `>=1` | no or yes | either | `formula.compiler_requirement_conflict` |
++| other value | any | any | any | any | `formula.compiler_requirement_unsupported` on `contract` |
++| omitted | any | invalid syntax such as `2`, `>= 2`, `>=2.0`, or empty string | any | any | `formula.compiler_requirement_invalid_syntax` |
++| omitted | any | unsupported future minimum such as `>=3` | any | any | `formula.compiler_requirement_unsupported_future` |
++| omitted | any | wrong TOML type, dotted table, or nested table | any | any | `formula.requirement_invalid_type` |
++| omitted | any | unknown `[requires]` key | any | any | `formula.requirement_unknown_axis` |
+ 
+ If several defects are present, diagnostic ordering follows the list above. For
+ example, an unknown requirement axis is reported before a missing v2 compiler
+@@ -369,8 +396,9 @@
+ | malformed TOML plus unsupported requirement | TOML decoding error |
+ | unknown `[requires]` key plus v2-only construct without `>=2` | `formula.requirement_unknown_axis` |
+ | wrong TOML type plus legacy `contract = "graph.v2"` | `formula.requirement_invalid_type` |
+-| unsupported `formula_compiler = ">=3"` plus disabled host | `formula.compiler_requirement_unsupported` |
++| unsupported future `formula_compiler = ">=3"` plus disabled host | `formula.compiler_requirement_unsupported_future` |
+ | `contract = "graph.v2"` plus `formula_compiler = ">=1"` plus disabled host | `formula.compiler_requirement_conflict` |
++| `version = 1` or `version = 2` plus v2-only construct without `>=2` | `formula.compiler_requirement_missing` |
+ | missing `>=2` for v2-only construct plus disabled host | `formula.compiler_requirement_missing` |
+ 
+ Diagnostic count and ordering rules:
+@@ -404,13 +432,17 @@
+ |---|---|
+ | invalid TOML syntax, duplicate table, or invalid array/table structure | plain TOML parse/decode error; no formula diagnostic code |
+ | valid TOML with wrong `[requires]` value type | structured `formula.requirement_invalid_type` |
+-| valid TOML with unsupported byte-exact string such as `">= 2"` or `">=3"` | structured `formula.compiler_requirement_unsupported` |
++| valid TOML with malformed byte-exact string such as `">= 2"` or `"2"` | structured `formula.compiler_requirement_invalid_syntax` |
++| valid TOML with syntactically valid future minimum such as `">=3"` | structured `formula.compiler_requirement_unsupported_future` |
+ | valid TOML with unknown `[requires]` key | structured `formula.requirement_unknown_axis` |
+ | valid TOML plus conflicting legacy `contract` | structured `formula.compiler_requirement_conflict` |
+ 
+-The v0 grammar is byte-exact: only omitted, `">=1"`, and `">=2"` are accepted.
+-No trimming, semver parsing, numeric coercion, or optimistic future-range
+-parsing is allowed in v0.
++The v0 accepted grammar is byte-exact: only omitted, `">=1"`, and `">=2"` are
++accepted. The parser may recognize `>=<integer>` only to emit the
++machine-distinguishable `formula.compiler_requirement_unsupported_future`
++diagnostic for future minimums above the host binary's known maximum. No
++trimming, semver parsing, numeric coercion, or optimistic future-range
++acceptance is allowed in v0.
+ 
+ V2-only construct registry completeness is CI-enforced. The registry fixture
+ enumerates every syntax location the decoder can produce for steps, children,
+@@ -644,6 +676,46 @@
+ or `gc.formula_contract` outside the parser, compatibility metadata writer,
+ shared workflow-root predicate, tests, fixtures, and docs.
+ 
++<!-- REVIEW: added per compiler-authority-enforcement -->
++
++The guard starts from a checked-in allowlist, not from an aspirational grep
++comment. The initial migration commit creates
++`internal/formula/testdata/raw_consumer_allowlist.yaml` with this shape:
++
++```yaml
++schema_version: 1
++allowed:
++  - package: internal/formula
++    file: internal/formula/compile.go
++    symbols: [NormalizeRequirements, writeCompatibilityMetadata]
++    reason: parser and alias writer own raw compatibility fields
++  - package: internal/sourceworkflow
++    file: internal/sourceworkflow/*.go
++    symbols: [IsWorkflowRootMetadata, WorkflowRootQuery]
++    reason: shared predicate owns legacy metadata fallback during alias window
++```
++
++`go test ./internal/formula ./internal/sourceworkflow ./cmd/gc` runs
++`TestNoNewFormulaRawConsumers`, which scans production Go files for raw
++`Contract`, `declaresGraphV2Contract`, `Requires.FormulaCompiler`,
++`Version`, `gc.formula_contract`, `gc.formula_compiler_requirement`, and
++`gc.formula_compiler_capability` reads. Additions fail unless the same change
++updates this allowlist with a file, symbol, owner, expiry condition, and test
++that proves the read is parser, compatibility-writer, or shared-predicate
++logic. The allowlist is report-only only in rollout phase 1; it becomes
++blocking before any durable producer switches to `CompileResult`.
++
++Durable writer APIs must make the accepted compile identity impossible to
++skip. New or modified APIs that can write roots, children, wisps, dependencies,
++convoys, hooks, retry metadata, continuation metadata, or convergence state may
++not accept a bare `*formula.Recipe` as their only formula argument. They must
++accept `*formula.CompileResult`, `formula.AcceptedCompileArtifact`, or an
++entry-point-specific struct that embeds one of those values and records the
++host capability and search-path hash used for the current operation. Tests
++must prove a caller cannot construct durable metadata from raw `contract`,
++raw `[requires]`, legacy `version`, `gc.formula_*` metadata, or global formula
++flags without going through the compiler-owned result.
++
+ Durable preflight contract:
+ 
+ | Entry point | Must complete before first durable write | Writes forbidden on fatal diagnostic |
+@@ -738,7 +810,7 @@
+ | `contract = "graph.v2"` | Works when old graph support is enabled | Fails with `formula.compiler_requirement_unsatisfied` | Works with deprecation warning |
+ | Dual `contract` plus `[requires] formula_compiler = ">=2"` | Works because old binary reads `contract` | Fails with `formula.compiler_requirement_unsatisfied` | Works with deprecation warning |
+ | `[requires] formula_compiler = ">=2"` only | Not supported for v2 formulas; old binary can miss the requirement | Fails with `formula.compiler_requirement_unsatisfied` | Works |
+-| Unsupported future requirement such as `>=3` | Not supported | Fails with unsupported requirement | Fails with unsupported requirement |
++| Unsupported future requirement such as `>=3` | Not supported | Fails with `formula.compiler_requirement_unsupported_future` | Fails with `formula.compiler_requirement_unsupported_future` |
+ 
+ Runtime compatibility decision:
+ 
+@@ -825,7 +897,7 @@
+ | New binary with `formula_v2=false` reading any graph-capability formula | Fails before durable writes with `formula.compiler_requirement_unsatisfied` |
+ | Mixed-version controllers sharing a bead store | New roots are dual-stamped until all supported readers use canonical keys |
+ | Native compiler path | Uses `CompileWithResult` and canonical diagnostics |
+-| `GC_NATIVE_FORMULA=false` or `bd` shell-out path | Must either preserve dual `contract` declarations or be proven to parse `[requires]` identically before source conversion |
++| `GC_NATIVE_FORMULA=false` or `bd` shell-out path | Validation-only probe; must either preserve dual `contract` declarations or prove byte-level `[requires]` parity before source conversion |
+ 
+ `gc formula validate --all-packs --legacy-contract-report` is a release-gate
+ command, not best-effort text. It returns JSON by default when `--json` is set
+@@ -858,7 +930,7 @@
+ | `legacy-only-graph-v2` | latest two published Gas City minor releases, current `main`, `bd >= 1.0.0` probe | old readers and new host-enabled readers accept; new host-disabled reader fails before writes |
+ | `dual-declared-graph-v2` | same | old readers accept through `contract`; new readers report source `dual` and deprecation warning |
+ | `requires-only-graph-v2` | current `main` only until minimum binary floor | old readers are allowed to fail; first-party distribution blocked until floor is enforced |
+-| `unsupported-future-requirement` | current `main` | deterministic `formula.compiler_requirement_unsupported` |
++| `unsupported-future-requirement` | current `main` | deterministic `formula.compiler_requirement_unsupported_future` |
+ | `invalid-shape-non-string` | current `main` | deterministic `formula.requirement_invalid_type` |
+ | `diagnostic-source-attribution` | direct CLI, API-routed CLI, Huma endpoint, dashboard fixture | identical code, source path/key/value, remediation, and host capability |
+ 
+@@ -870,6 +942,61 @@
+ the corpus expected outputs, and release notes in the same change. The parity
+ gate runs:
+ 
++<!-- REVIEW: added per executable-migration-gates -->
++
++The three release artifacts are executable inputs with owners and schemas:
++
++```yaml
++# docs/release/formula-compiler-compatibility.yaml
++schema_version: 1
++owner: release-captain
++updated_by: gc formula validate --compat-corpus internal/formula/testdata/compat_corpus --write-compatibility-artifact
++supported_readers:
++  - name: gas-city
++    kind: binary
++    version: 0.x.y
++    sha: <git-sha>
++    required: true
++  - name: bd-probe
++    kind: compatibility_probe
++    version: 1.0.0
++    required_until: native-only-runtime
++fixtures:
++  - id: dual-declared-graph-v2
++    expected: accept
++    diagnostics: [formula.contract_deprecated]
++```
++
++```json
++{
++  "schema_version": 1,
++  "owner": "release-captain",
++  "updated_by": "gc formula validate --all-packs --write-min-floor docs/release/formula-compiler-min-floor.json",
++  "minimum_gc_for_requires_only": "0.x.y",
++  "first_gc_with_requires": "0.x.y",
++  "first_gc_with_canonical_root_metadata": "0.x.y",
++  "first_gc_without_bd_runtime_fallback": "0.x.y",
++  "dual_declared_compatibility_window_minor_releases": 2,
++  "first_party_requires_only_allowed": false
++}
++```
++
++`docs/release/formula-compiler-external-support.md` is a release checklist,
++not prose-only background. It must contain frontmatter with
++`schema_version`, `owner`, `status` (`active`, `expired`, or `not-needed`),
++`supported_old_binaries`, `support_strategy`, `expires_after_release`, and
++links to legacy inventory reports. CI blocks alias removal while the file is
++missing, has `status: active`, or names supported readers that still require
++legacy `contract`.
++
++The `GC_NATIVE_FORMULA=false` and `bd` paths are validation-only probes after
++this design lands. They are not supported runtime fallbacks for sling, orders,
++convergence, fanout, controller validation, API, or dashboard preview. Keeping
++either path available for release validation requires byte-level corpus parity:
++the native and probe runs must match normalized requirement, source
++attribution, diagnostic code, diagnostic order, exit code, and provenance for
++every fixture that first-party distribution depends on.
++
+ ```bash
+ gc formula validate --compat-corpus internal/formula/testdata/compat_corpus --json
+ GC_NATIVE_FORMULA=false gc formula validate --compat-corpus internal/formula/testdata/compat_corpus --json
+@@ -932,9 +1059,11 @@
+    compatibility incident.
+ 
+ Alias removal criteria are stricter than dual-stamp retirement: the parser may
+-stop accepting legacy `contract` only after the external plan expires and the
+-legacy inventory gate has reported zero first-party legacy-only formulas for
+-two consecutive minor releases.
++stop accepting legacy `contract` only after the enforced minimum binary floor
++artifact says all supported readers understand canonical `[requires]`, the
++configured dual-declared compatibility window has elapsed, the external plan
++expires, and the legacy inventory gate has reported zero first-party
++legacy-only formulas for two consecutive minor releases.
+ 
+ ## Host Capability And Diagnostics
+ 
+@@ -956,7 +1085,9 @@
+ |---|---|---|
+ | `formula.requirement_unknown_axis` | error | `[requires]` contains an unsupported key |
+ | `formula.requirement_invalid_type` | error | A requirement value has the wrong TOML type |
+-| `formula.compiler_requirement_unsupported` | error | The expression is not supported in v0 |
++| `formula.compiler_requirement_invalid_syntax` | error | The expression is malformed or outside the byte-exact v0 grammar |
++| `formula.compiler_requirement_unsupported_future` | error | The expression is syntactically valid but requires a future compiler capability |
++| `formula.compiler_requirement_unsupported` | error | A legacy compatibility field such as `contract` has an unsupported value |
+ | `formula.compiler_requirement_conflict` | error | `contract` and `[requires]` disagree |
+ | `formula.compiler_requirement_missing` | error | A v2-only construct lacks a v2 requirement |
+ | `formula.compiler_requirement_unsatisfied` | error | Host config cannot satisfy the normalized requirement |
+@@ -970,7 +1101,9 @@
+ |---|---|---|---|---|---|
+ | `formula.requirement_unknown_axis` | `unsupported [requires] key <key>` / remove it or upgrade to a binary that supports the axis | fatal stderr, exit 1 | HTTP 400 typed diagnostic | formula preview validation error | no event except controller/order failure wrapper |
+ | `formula.requirement_invalid_type` | `<key> must be a TOML string` / use `formula_compiler = ">=2"` | fatal stderr, exit 1 | HTTP 400 | formula preview validation error | no event except controller/order failure wrapper |
+-| `formula.compiler_requirement_unsupported` | `unsupported formula compiler requirement <value>` / use omitted, `>=1`, or `>=2` | fatal stderr, exit 1 | HTTP 400 | formula preview validation error | no event except controller/order failure wrapper |
++| `formula.compiler_requirement_invalid_syntax` | `invalid formula compiler requirement <value>` / use omitted, `>=1`, or `>=2` exactly | fatal stderr, exit 1 | HTTP 400 | formula preview validation error | no event except controller/order failure wrapper |
++| `formula.compiler_requirement_unsupported_future` | `formula compiler capability <N> is not supported by this binary` / upgrade Gas City or use `>=1` or `>=2` | fatal stderr, exit 1 | HTTP 400 | formula preview validation error | no event except controller/order failure wrapper |
++| `formula.compiler_requirement_unsupported` | `unsupported legacy formula contract <value>` / use `[requires] formula_compiler = ">=2"` | fatal stderr, exit 1 | HTTP 400 | formula preview validation error | no event except controller/order failure wrapper |
+ | `formula.compiler_requirement_conflict` | `contract and [requires] disagree` / make both declare graph v2 or remove `contract` | fatal stderr, exit 1 | HTTP 400 | formula preview validation error | no event except controller/order failure wrapper |
+ | `formula.compiler_requirement_missing` | `v2-only construct requires formula_compiler = ">=2"` / add `[requires] formula_compiler = ">=2"` | fatal stderr, exit 1 | HTTP 400 | formula preview validation error | no event except controller/order failure wrapper |
+ | `formula.compiler_requirement_unsatisfied` | `host formula compiler capability 1 does not satisfy >=2` / enable `[daemon] formula_v2` or choose a v1 formula | fatal stderr, exit 1; no beads created | HTTP 400 for validation/preview or 409 for launch conflict plus diagnostic body | disabled-capability state with remediation | registered compile-failure wrapper event |
+@@ -1018,7 +1151,48 @@
+   eviction, reset on process restart and config reload. Warning diagnostics are
+   suppressed by `OnceKey`; fatal diagnostics in background loops are grouped by
+   `(producer, subject id, OnceKey, host capability, config generation)` until
+-  the formula source, config generation, or subject id changes.
++  the formula source, config generation, or subject id changes. Evictions are
++  observable through a producer-local counter and debug log field so operators
++  can tell the difference between genuinely new failures and cache churn.
++
++<!-- REVIEW: added per diagnostics-wire-contract -->
++
++Typed HTTP responses use Huma structs generated from Go types. The formula
++validation, preview, sling-launch conflict, order preview, and convergence
++preview routes all embed the same diagnostic payload:
++
++```go
++type FormulaDiagnostic struct {
++    Code                  string `json:"code" doc:"Stable diagnostic code"`
++    Severity              string `json:"severity" enum:"error,warning"`
++    Formula               string `json:"formula,omitempty"`
++    SourcePath            string `json:"source_path,omitempty"`
++    SourceKey             string `json:"source_key,omitempty"`
++    SourceValue           string `json:"source_value,omitempty"`
++    NormalizedRequirement string `json:"normalized_requirement,omitempty"`
++    HostCapability        string `json:"host_capability,omitempty"`
++    Message               string `json:"message"`
++    Remediation           string `json:"remediation,omitempty"`
++    OnceKey               string `json:"once_key,omitempty"`
++}
++
++type FormulaDiagnosticsBody struct {
++    Diagnostics []FormulaDiagnostic `json:"diagnostics"`
++}
++```
++
++No formula diagnostic HTTP path may use `map[string]any`, `json.RawMessage`,
++hand-written JSON, or stderr parsing. `TestOpenAPISpecInSync`,
++dashboard generated-client compilation, and a golden OpenAPI excerpt test must
++fail when this shape changes without regenerated schemas and TypeScript.
++
++CLI exit code mapping is fixed: `0` for accepted input with zero fatal
++diagnostics, `1` for process/internal I/O failures, and `2` for formula
++diagnostics on validation/report commands. Runtime launch commands such as
++`gc sling --formula` and `gc order` use exit `1` for a failed operation but
++still print the same diagnostic code and fields. API-routed CLI commands must
++preserve the server diagnostic code, message, remediation, source attribution,
++and status class instead of rewriting them locally.
+ 
+ Surface parity contract:
+ 
+@@ -1144,6 +1318,15 @@
+ locked revision, dirty status, or transitive import chain from a staged path,
+ formula name, or bead metadata after compilation.
+ 
++`ContentHash` is the lowercase hex SHA-256 of canonical source bytes after
++formula resolution, before runtime variable substitution, and before any graph
++transform. For a multi-file contribution such as expansion/aspect imports, the
++hash input is a length-prefixed manifest of each original source path,
++locked revision or local dirty marker, file mode, and raw bytes in deterministic
++resolver order. The hash excludes absolute staging paths and generated
++diagnostics so the same pinned pack content produces the same value across
++machines.
++
+ Layer resolution must preserve pack binding before symlink staging. A staged
+ winner path under `.beads/formulas/` is not enough provenance by itself; the
+ compile result records the original layer, pack, import source/ref, locked
+@@ -1191,6 +1374,14 @@
+ transitive imports, lockfile-backed refs, remote SHA pins, and shadowed formulas
+ whose losing source still contains legacy `contract`.
+ 
++Shadowed formula diagnostics default to warning, not silence. When a losing
++layer has a stricter requirement than the winning formula, an unsupported
++future requirement, or legacy-only `contract`, validation reports a
++non-blocking shadow diagnostic with the winner path, losing path, layer
++priority, and remediation. Release gates may promote that warning to failure
++for first-party packs because a later layer-order change could expose the
++shadowed formula.
++
+ `migration_hints` is stable JSON, not prose. Each hint contains:
+ 
+ ```json
+@@ -1297,6 +1488,15 @@
+ stderr, HTTP/API responses, dashboard state, generated client types, controller
+ logs, order events, or release validation output.
+ 
++<!-- REVIEW: added per docs-rollout-gate -->
++
++This gate is phase-blocking, not advisory. A PR that exposes any formula
++requirement diagnostic through CLI, API, dashboard, generated client types,
++controller logs, order events, or release validation output must include the
++docs/example bundle below and the generated-help refresh in the same branch.
++There is no feature-flag exception: hidden or experimental diagnostics still
++count as user-visible once an operator can trigger or observe them.
++
+ Requirement-surface comparison that must appear in reference docs:
+ 
+ | Surface | Owner | Purpose | Example |
+@@ -1453,14 +1653,32 @@
+ Convergence implementation decision:
+ 
+ The convergence formula subset parser is not an independent compiler. It is
+-rewritten as a typed projection from `CompileResult` for fields convergence
+-needs, followed by convergence-only domain validation. Domain validation may
+-check convergence semantics such as allowed retry shape, but it may not
+-interpret raw `contract`, raw `[requires]`, graph metadata strings, or host
+-capability. That keeps formula syntax, requirement satisfaction, and diagnostic
+-projection owned by `internal/formula`.
++rewritten as a typed projection over generic `CompileResult` fields, followed
++by convergence-only domain validation. Domain validation may check convergence
++semantics such as allowed retry shape, but it may not interpret raw `contract`,
++raw `[requires]`, graph metadata strings, or host capability. That keeps
++formula syntax, requirement satisfaction, and diagnostic projection owned by
++`internal/formula` while keeping convergence-specific API surface inside
++`internal/convergence`.
++
++`internal/formula` exposes only generic compiled facts needed by all
++execution paths:
++
++```go
++type CompileResult struct {
++    Recipe       *Recipe
++    Requirements NormalizedRequirements
++    GraphWorkflow bool
++    Diagnostics  []Diagnostic
++    Provenance   Provenance
++    Steps        []CompiledStep
++    RuntimeVars  []CompiledRuntimeVar
++}
++```
++
++<!-- REVIEW: added per convergence-boundary -->
+ 
+-The projection API is explicit:
++`internal/convergence` owns the projection API:
+ 
+ ```go
+ type ConvergenceMetadata struct {
+@@ -1476,15 +1694,17 @@
+     Requirements        NormalizedRequirements
+ }
+ 
+-func (r *CompileResult) ConvergenceMetadata() (ConvergenceMetadata, []Diagnostic)
++func ProjectFormula(result *formula.CompileResult) (ConvergenceMetadata, []formula.Diagnostic)
++func ValidateProjection(meta ConvergenceMetadata) []formula.Diagnostic
+ ```
+ 
+-`ConvergenceMetadata()` may report convergence-domain diagnostics such as a
+-missing evaluate prompt, but it may not reinterpret raw formula requirement
+-fields or host capability. `CreateConvergenceBead`, retry root creation,
+-missing-child markers, speculative wisps, and the first `PourWisp` call all
+-run after canonical compile, requirement satisfaction, projection, and
+-convergence-domain validation complete.
++`ProjectFormula` may report convergence-domain diagnostics such as a missing
++evaluate prompt, but it may not reinterpret raw formula requirement fields or
++host capability. `CreateConvergenceBead`, retry root creation, missing-child
++markers, speculative wisps, and the first `PourWisp` call all run after this
++order: `CompileWithResult`, `CheckRequirements`, `ProjectFormula`,
++`ValidateProjection`, accepted artifact persistence when needed, then durable
++root, metadata, wisp, retry, iteration, or child writes.
+ 
+ Existing convergence roots use persisted accepted compile artifacts for their
+ current formula even if the host capability is later downgraded. Any operation
+@@ -1522,12 +1742,13 @@
+ |---|---|
+ | Compiler capability numbers | Monotonic minimums. A host at capability `N` satisfies formula requirement `<=N`. |
+ | Accepted v0 syntax | Closed grammar: omitted, `>=1`, and `>=2` only. |
+-| Unsupported future capability | `>=3` is `formula.compiler_requirement_unsupported` until the binary implements capability 3. |
+-| Invalid syntax | Bad spacing, exact numbers, decimals, empty strings, and wrong TOML types remain syntax/type diagnostics, not upgrade hints. |
++| Unsupported future capability | `>=3` is `formula.compiler_requirement_unsupported_future` until the binary implements capability 3. |
++| Invalid syntax | Bad spacing, exact numbers, decimals, empty strings, and wrong TOML types remain `formula.compiler_requirement_invalid_syntax` or type diagnostics, not upgrade hints. |
+ | Unknown axis | Always `formula.requirement_unknown_axis`; old binaries do not ignore future axes. |
+ | Extension namespace | No user-defined axes in v0. A future extension axis must be a first-class typed field, not `x-*` passthrough. |
+ | Zero value | `CompilerCapability(0)` is an internal bug and must never escape normalization. |
+ | Provenance | Each axis records source path/key/value and normalized value independently. |
++| Host capability growth | Guarded named fields on `HostCapabilities`; no raw string map until at least two implemented axes prove a generic representation is simpler. |
+ 
+ Every future requirement axis must add all of these in the same change:
+ 
+@@ -1539,10 +1760,30 @@
+ 
+ Compiler capability numbers are stable once released and are never reused for
+ different semantics. If a future capability such as `3` is introduced, older
+-binaries reject `>=3` with `formula.compiler_requirement_unsupported`; newer
+-binaries may accept it only after adding typed support, tests, diagnostics, and
+-provenance. If a future requirement is not monotonic, it must use a different
+-axis rather than overloading `formula_compiler`.
++binaries reject `>=3` with `formula.compiler_requirement_unsupported_future`;
++newer binaries may accept it only after adding typed support, tests,
++diagnostics, and provenance. If a future requirement is not monotonic, it must
++use a different axis rather than overloading `formula_compiler`.
++
++Worked second-axis example:
++
++```toml
++[requires]
++formula_compiler = ">=2"
++state_store = ">=2"
++```
++
++`state_store` is illustrative, not part of v0. Adding it requires
++`HostCapabilities{FormulaCompiler: ..., StateStore: ...}`,
++`NormalizedRequirements.StateStore()`, `formula.state_store_requirement_*`
++diagnostics mirroring the syntax/type/future/unsatisfied split above,
++provenance fields for `requires.state_store`, persisted metadata such as
++`gc.formula_state_store_requirement`, validation-matrix dimensions crossing
++`state_store` with formula compiler capability, pack floor artifacts naming
++the first binary that satisfies the new axis, and workflow-root predicates that
++continue to classify roots by graph workflow using formula compiler metadata
++only. Old binaries fail closed with `formula.requirement_unknown_axis` instead
++of silently running a formula whose state-store requirement they cannot satisfy.
+ 
+ ## Consequences
+ 
