@@ -4,7 +4,7 @@
 
 **Scope:** Builtinpacks registry, embed path migration, Maintenance retirement, and downstream reference safety.
 
-Reviewed against the Attempt 3/2 requirements document (`.gc/design-reviews/ga-dtvdnd/attempt-3/design-before.md` updated 2026-06-09T01:20:00Z, which is byte-identical to Attempt 2) and the live Go codebase.
+Reviewed against the Attempt 4/3/2 requirements document (`.gc/design-reviews/ga-dtvdnd/attempt-4/design-before.md` updated 2026-06-09T01:20:00Z, which is byte-identical to Attempt 2) and the live Go codebase.
 
 ---
 
@@ -12,7 +12,7 @@ Reviewed against the Attempt 3/2 requirements document (`.gc/design-reviews/ga-d
 
 As the **Embed, Materialization & Build Reviewer**, I must issue a **BLOCK** verdict on the current Requirements Document for the Core and Gastown Pack Split. 
 
-While Attempt 2/3 shows clear progression in framing the high-level goals—such as retiring Maintenance and loading Gastown explicitly—the requirements document remains byte-identical between Attempt 2 and Attempt 3. This means multiple critical, low-level materialization, build, and compiler-safety blockers raised in the previous round remain completely unaddressed.
+While the requirements document has structured the high-level goals well—such as retiring Maintenance and loading Gastown explicitly—it remains completely identical between Attempts 2, 3, and 4. This means multiple critical, low-level materialization, build, and compiler-safety blockers raised in previous rounds remain completely unaddressed.
 
 Specifically, the requirements document fails to define:
 1. **Core's canonical post-migration embedded path** or how existing reference paths under `internal/bootstrap/packs/core` are handled (blocking compile-time predictability).
@@ -44,7 +44,8 @@ Until these gaps are resolved and concrete acceptance criteria are added to hand
   - `cmd/gc/embed_builtin_packs.go:237` hardcodes `required := []string{"core", "maintenance"}`.
   - `cmd/gc/embed_builtin_packs.go:265` comments: `"Core and maintenance are always included."`
   - `internal/builtinpacks/registry.go:19` compile-imports `"github.com/gastownhall/gascity/examples/gastown/packs/maintenance"`.
-  - `internal/builtinpacks/registry.go:128-129` hardcodes `case "gastown", "maintenance"` to return their public subpaths.
+  - `internal/builtinpacks/registry.go:56` lists `maintenance` in the `All()` slice.
+  - `internal/builtinpacks/registry.go:128-129` hardcodes `case "gastown", "maintenance"` to return their public subpaths in `publicSubpathForPack`.
 - **The Risk:** Retiring Maintenance is a *Go compile-time risk*. If we delete the Maintenance pack files but fail to remove the compile-time import in `registry.go:19`, the build breaks instantly. If we keep the import but remove the pack, it fails.
 - **The Blocker:** Builtin materialization is self-enforcing at compile time, but leaving the explicit Go-level steps un-gated by ACs allows half-done removals that leak references. We need a clear negative contract in AC5 mapping the removal of:
   1. The compile-import in `registry.go:19`
@@ -56,7 +57,7 @@ Until these gaps are resolved and concrete acceptance criteria are added to hand
 
 **No.** This is the most severe unaddressed runtime risk. AC6 mandates an asset migration ledger to track *source* files, but does not enforce **downstream consumer/reference closure**.
 - **The Live State:** There is a broad surface of active scripts, configs, and doctor checks pointing directly at legacy Maintenance assets:
-  - **Runtime break:** `examples/dolt/port_resolve.sh:6` sources `.gc/system/packs/maintenance/assets/scripts/dolt-target.sh`. This path is asserted by `port_resolve_test.go:148`. If Maintenance is retired and the script is rehomed, but the sourcing line is not repointed, Dolt port resolution silently fails at runtime.
+  - **Runtime break:** `examples/dolt/assets/scripts/port_resolve.sh:6` comment indicates coupling with `.gc/system/packs/maintenance/assets/scripts/dolt-target.sh`. Sourcing is inverted in `examples/gastown/packs/maintenance/assets/scripts/dolt-target.sh:160` where it evaluates `. "${DOLT_PORT_RESOLVE_SCRIPT:?port_resolve.sh not resolved}"` against the dolt pack's materialized `port_resolve.sh`. If Maintenance is retired and the script is rehomed or retired, but the sourcing line is not repointed, Dolt port resolution silently fails at runtime.
   - **Silent feature loss:** `examples/gastown/packs/gastown/assets/scripts/status-line.sh:14-16` sources `_bd_trace.sh` from `packs/maintenance`. It uses a `-f` guard, so when Maintenance is retired, the script continues but silently drops the tracing capability.
   - **Doctor failures:** `cmd/gc/jsonl_archive_doctor_check.go:59-60` explicitly searches `.gc/runtime/packs/maintenance/jsonl-export-state.json`. 
 - **The Blocker:** An asset migration ledger that only covers source-to-target mapping misses these consumers. We must extend AC6 (or add a separate AC) requiring **downstream reference closure**: every consumer point (`source` lines, config paths, doctor searches) must be repointed or retired, validated by build and runtime test executions (e.g. running dolt port-resolution post-migration).
