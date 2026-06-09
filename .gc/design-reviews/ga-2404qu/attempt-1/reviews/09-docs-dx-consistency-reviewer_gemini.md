@@ -1,22 +1,35 @@
-# Felix Moreau — Docs & DX Consistency Reviewer (Iteration 18 / Attempt 1, Independent DeepSeek V4 Flash Style Review)
+# Felix Moreau — Docs & DX Consistency Reviewer (Iteration 19 / Attempt 1, Independent DeepSeek V4 Flash Style Review)
 
 **Verdict:** block
 
 **Scope:** Docs & DX Consistency — documentation consistency, operator terminology, tutorial integrity, and maintenance word disambiguation.
 
-This independent review evaluates the Iteration 18 / Attempt 1 snapshot of the Core and Gastown Pack Split design (`.gc/design-reviews/ga-2404qu/attempt-1/design-before.md` and `design-after.md`) against the live codebase at `/data/projects/gascity/` and `requirements.md`.
+This independent review evaluates the Iteration 19 / Attempt 1 snapshot of the Core and Gastown Pack Split design (`.gc/design-review-inputs/core-gastown-pack-migration/design.md`) against the live codebase at `/data/projects/gascity/` and `requirements.md`.
 
 ---
 
 ## Executive Summary
 
-As Felix Moreau, the **Docs & DX Consistency Reviewer**, I have conducted a rigorous audit of the revised design in Iteration 18.
+As Felix Moreau, the **Docs & DX Consistency Reviewer**, I have conducted a rigorous audit of the revised design in Iteration 19.
 
-The design makes major strides in formalizing the **System-Pack Wording Matrix** (`system-pack-wording.generated.yaml`) and establishing a bidirectional, generated documentation linter as a release-gate blocking invariant. Aligning terminology parity within the same implementation slice as its corresponding behavior represents a huge step forward for Gas City's developer experience (DX).
+The design continues to make major strides in formalizing the **System-Pack Wording Matrix** (`system-pack-wording.generated.yaml`) and establishing a bidirectional, generated documentation linter as a release-gate blocking invariant. Aligning terminology parity within the same implementation slice as its corresponding behavior represents a massive step forward for Gas City's developer experience (DX).
 
 However, from an independent **DeepSeek V4 Flash perspective**, several critical, operator-visible DX contradictions, factual baseline errors, and material gaps remain in the Proposed Design text itself. The design recommends a ripgrep command that mathematically guarantees critical stale-path files will escape linting, frames a completely non-existent reference page as currently existing under "Current System," and fails to include high-priority tutorial/troubleshooting docs in the named update scope.
 
+Furthermore, given that other lanes such as Sofia's Doctor review are currently a firm **BLOCK**, and these documentation gaps directly correlate with outstanding semantic and structural contradictions in the design, my verdict remains a firm **BLOCK**.
+
 Until these contradictions are resolved and the files are explicitly added to the named update scopes, this lane remains a **BLOCK**.
+
+---
+
+## Top Strengths
+
+1. **Executable Wording Matrix:**
+   Transitioning the wording matrix from loose prose into a structured, generated artifact (`plans/core-gastown-pack-migration/system-pack-wording.generated.yaml`) governed by a schema and validated in CI via `TestSystemPackWordingFresh` is an outstanding victory. Enforcing this as a hard gate ensures developer consistency.
+2. **Hardened Release Gates:**
+   Forcing docs updates, navigation, and golden tests to move in the same slice as the corresponding code changes—and enforcing this via a real release gate—guarantees that human-facing documentation cannot drift from the system's actual behavior.
+3. **Retired-Directory Preservation Policy:**
+   Preserving `.gc/system/packs/maintenance` and `.gc/system/packs/gastown` as ignored legacy state rather than deleting them protects existing operator environments and prevents catastrophic silent data loss on upgrade.
 
 ---
 
@@ -69,16 +82,26 @@ Until these contradictions are resolved and the files are explicitly added to th
 
 ## Blocker & Critical Gaps
 
-### 1. The Ripgrep Glob Gap Contradiction (Blocker)
-* **Reference**: `design-after.md` Line 517
-* **The Finding**: The design mandates an extension-agnostic docs scan covering Markdown, MDX, JSON, and TXT. Yet, the recommended inventory-building command explicitly restricts files via:
-  `-g '*.md' -g '*.toml' -g '*.go' -g '*.sh'`
-* **The Impact**: This glob selection mathematically guarantees that `.mdx` files (like `gc-start-walkthrough.mdx` and `index.mdx`), `.json` files (like the docs navigation index `docs.json` or generated schemas), and `.txt` files will escape the baseline inventory. Stale paths and contradictory terms will hide in these files until they trigger a CI failure during the final docs-validation gate.
+### [Blocker] The Ripgrep Glob Gap Contradiction
+- **Severity:** blocker
+- **Confidence:** high
+- **Quality dimension:** correctness
+- **Gate impact:** blocker
+- **Evidence:** `.gc/design-review-inputs/core-gastown-pack-migration/design.md`:3222
+- **Pattern comparison:** The design mandates an extension-agnostic docs scan covering Markdown, MDX, JSON, and TXT. Yet, the recommended inventory-building command explicitly restricts files via: `-g '*.md' -g '*.toml' -g '*.go' -g '*.sh'`
+- **Why it matters:** This glob selection mathematically guarantees that `.mdx` files (like `gc-start-walkthrough.mdx`), `.json` files (like the docs navigation index `docs.json` or generated schemas), and `.txt` files will escape the baseline inventory. Stale paths and contradictory terms will hide in these files until they trigger a CI failure during the final docs-validation gate.
+- **Suggested fix:** Update the recommended inventory command on line 3222 to cover all documentation formats:
+  `rg -n "maintenance|system/packs|runtime/packs|gastown|PublicGastown|dog|Core" docs examples cmd internal -g '*.md' -g '*.mdx' -g '*.toml' -g '*.go' -g '*.sh' -g '*.json' -g '*.txt'`
 
-### 2. Broken Baseline Claims for `system-packs.md` (Blocker)
-* **Reference**: `design-after.md` Line 537
-* **The Finding**: The design refers to `docs/reference/system-packs.md` under "Examples And Docs" as a page to update. In reality, `docs/reference/system-packs.md` does **not** exist in the active tree of the checkout.
-* **The Impact**: This page must be created from scratch, not merely edited. Confusing "create" and "edit" means the work is mis-scoped. Since this page serves as the canonical system-pack reference, its creation and registration must be explicitly scoped as a first-slice deliverable to keep intermediate states consistent.
+### [Blocker] Broken Baseline Claims for `system-packs.md`
+- **Severity:** blocker
+- **Confidence:** high
+- **Quality dimension:** correctness
+- **Gate impact:** blocker
+- **Evidence:** `.gc/design-review-inputs/core-gastown-pack-migration/design.md`:3242
+- **Pattern comparison:** The design refers to `docs/reference/system-packs.md` under "Examples And Docs" as a page to update. In reality, `docs/reference/system-packs.md` does **not** exist in the active tree of the checkout.
+- **Why it matters:** Since this page does not exist, it cannot be merely "updated." This page must be created from scratch, and it must be registered in the docs navigation `docs/docs.json`. Confusing "create" and "edit" means the work is mis-scoped. The design must explicitly frame this as a new document creation and nav-registration rather than an edit, ensuring it lands in the first operator-facing behavior-changing slice.
+- **Suggested fix:** Frame the creation of `docs/reference/system-packs.md` clearly as a new document creation (and nav-registration) rather than an edit, and ensure it lands in the first operator-facing behavior-changing slice.
 
 ---
 
@@ -87,7 +110,7 @@ Until these contradictions are resolved and the files are explicitly added to th
 Before this design can be approved, the following modifications must be made:
 
 1. **Unify terminology**: Standardize operator vocabulary strictly under "maintenance-worker" (matching the `maintenance_worker` binding) or define a clear allowed/forbidden context boundary for "maintenance agent" vs. "maintenance worker" in the wording matrix.
-2. **Fix the inventory glob**: Update the recommended inventory command on line 517 to cover all documentation formats:
+2. **Fix the inventory glob**: Update the recommended inventory command on line 3222 to cover all documentation formats:
    `rg -n "maintenance|system/packs|runtime/packs|gastown|PublicGastown|dog|Core" docs examples cmd internal -g '*.md' -g '*.mdx' -g '*.toml' -g '*.go' -g '*.sh' -g '*.json' -g '*.txt'`
 3. **Correct the `system-packs.md` baseline**: Frame the creation of `docs/reference/system-packs.md` clearly as a new document creation (and nav-registration) rather than an edit, and ensure it lands in the first operator-facing behavior-changing slice.
 4. **Expand named update scopes**: Explicitly add the following files to the named docs-update inventory:
