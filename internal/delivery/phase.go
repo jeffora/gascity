@@ -3,6 +3,8 @@
 // metadata — callers must never write gc.phase directly via SetMetadata.
 package delivery
 
+import "github.com/gastownhall/gascity/internal/beadmeta"
+
 // Phase state constants for the PR delivery state machine.
 const (
 	PhaseBuilding        = "building"
@@ -18,9 +20,9 @@ const (
 
 // Metadata key constants written to bead records by the delivery package.
 const (
-	MetaKeyPhase        = "gc.phase"
-	MetaKeyPhaseHistory = "gc.phase_history"
-	MetaKeyPRURL        = "gc.pr_url"
+	MetaKeyPhase        = beadmeta.PhaseMetadataKey
+	MetaKeyPhaseHistory = beadmeta.PhaseHistoryMetadataKey
+	MetaKeyPRURL        = beadmeta.PRURLMetadataKey
 )
 
 // IsTerminalPhase reports whether p is a terminal phase (merged or abandoned).
