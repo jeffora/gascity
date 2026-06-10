@@ -18,6 +18,7 @@ import (
 	"github.com/gastownhall/gascity/internal/config"
 	convoycore "github.com/gastownhall/gascity/internal/convoy"
 	"github.com/gastownhall/gascity/internal/formula"
+	"github.com/gastownhall/gascity/internal/graphroute"
 	"github.com/gastownhall/gascity/internal/runtime"
 	"github.com/gastownhall/gascity/internal/session"
 	"github.com/gastownhall/gascity/internal/shellquote"
@@ -1201,18 +1202,18 @@ func decorateGraphWorkflowRecipe(recipe *formula.Recipe, routeVars map[string]st
 			}
 			continue
 		}
-		if sling.IsWorkflowTopologyKind(step.Metadata["gc.kind"]) {
+		if graphroute.IsWorkflowTopologyKind(step.Metadata["gc.kind"]) {
 			continue
 		}
 		binding, err := resolveGraphStepBindingWithVars(step.ID, stepByID, stepAlias, depsByStep, bindingCache, resolving, routeVars, defaultRoute, routingRigContext, store, cityName, cityPath, cfg)
 		if err != nil {
 			return err
 		}
-		if isControlDispatcherKind(step.Metadata["gc.kind"]) {
-			assignGraphStepRoute(step, binding, &controlRoute)
+		if graphroute.IsControlDispatcherKind(step.Metadata["gc.kind"]) {
+			graphroute.AssignGraphStepRoute(step, binding, &controlRoute)
 			continue
 		}
-		assignGraphStepRoute(step, binding, nil)
+		graphroute.AssignGraphStepRoute(step, binding, nil)
 	}
 	return nil
 }
@@ -1242,8 +1243,8 @@ func workflowStoreRefForDir(storeDir, cityPath, cityName string, cfg *config.Cit
 	return ""
 }
 
-// graphRouteBinding is an alias for sling.GraphRouteBinding.
-type graphRouteBinding = sling.GraphRouteBinding
+// graphRouteBinding is an alias for graphroute.GraphRouteBinding.
+type graphRouteBinding = graphroute.GraphRouteBinding
 
 type graphStepTarget struct {
 	value        string
