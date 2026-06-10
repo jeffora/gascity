@@ -1,65 +1,58 @@
 # Elena Marchetti - DeepSeek V4 Flash
 
-**Verdict:** iterate
+**Verdict:** block
 
-Lane: session lifecycle ownership, external metadata write audit, patch-map escape hatches, CI guard coverage. This reviews the current `DESIGN.md` (the attempt-16 revision, located at `.gc/design-reviews/ga-unpr2y/attempt-16/design-before.md`), alongside `REQUIREMENTS.md` and the existing codebase. Findings are validated against the live check-out on this branch; inline citations and code-level references are provided below.
+Lane: session lifecycle ownership, external metadata write audit, patch-map escape hatches, CI guard coverage. This reviews the current `DESIGN.md` (the attempt-19 revision, located at `.gc/design-reviews/ga-unpr2y/attempt-19/design-before.md`), alongside `REQUIREMENTS.md` and the existing codebase. Findings are validated against the live check-out on this branch; inline citations and code-level references are provided below.
 
 ---
 
 ### Top strengths:
-- **Rigorous Slice 0 Gates:** The `Authority And Entry Gates` section (lines 109-134) establishes a non-negotiable dependency ordering: no behavior-moving slice may start until it depends on a closed, validated Slice 0 bead. This correctly prevents premature refactoring before the guard infrastructure is fully baseline-integrated.
-- **Explicit Separation of Concerns:** The reconciler/runtime split matrix (lines 452-495) cleanly isolates state-machine transitions and state eligibility in `internal/session` from reconciler policy decisions (like budgets, alerts, and desired-state pool scaling). This prevents domain-model bloat and keeps the core logic highly cohesive.
-- **Strict Read-Path Repair Prohibition:** Rejecting side-effect mutations on query-side lookups (lines 246-251) and requiring the classifier to return a typed `repair-needed` result is correct. This directly addresses the risk of silent read-path mutation hiding persistence failures.
+- **Outstanding Iterative Design Rigor:** The comprehensive transition table in the "Attempt 17 Review Response" (`DESIGN.md:54-81`) shows excellent engineering discipline, tracking and addressing previous feedback point-by-point.
+- **Smarter, Practical Staging of Slice 0:** Splitting Slice 0 artifacts into a minimal Slice 1 close gate versus schema-only, non-normative inventories (`DESIGN.md:220-237`) is a highly pragmatic staging decision. This avoids blocking initial read-only progress with unrelated downstream validation details.
+- **Quarantining of Side-Effect Repair:** Formally classification-blocking `RepairEmptyType` from read-only lookup paths and classifying it as a diagnostic `repair_pending` (`DESIGN.md:359-368`) prevents silent state mutation during simple query lookups.
 
 ---
 
 ### Critical risks:
 
-#### 1. [Blocker] Cosmetic Exception Expiries with Zero Build-Enforced Forcing Function
-- **Evidence:** `DESIGN.md` lines 181-184 (validators list), lines 319-322 (guard failure triggers).
-- **Why it matters:** The design relies heavily on "expiring exception rows" in `WORKER_BOUNDARY_EXCEPTIONS.yaml` and `SESSION_BOUNDARY_SYMBOLS.yaml` to ensure the bypass list actually shrinks over time. However, the validator failure criteria (lines 181-184) still do **not** fail the build when an exception row is past its stated expiry, nor when a writer persists after its retirement condition is met. Without an automated, build-breaking ratchet for expired exceptions, the massive existing baseline (~16 raw lifecycle writers, 16 `RepairEmptyType` sites, and multiple patch-application loops) becomes a permanent bypass list.
-- **Mitigation:** Slice 0 validators must explicitly fail the build if:
-  1. Any exception row's `expiry` date is in the past relative to current system time.
-  2. The total number of exception/allowlist rows increases relative to the main branch (VCS/git-diff ratchet).
+#### 1. [Blocker] Manifests and Exception Ledgers Exist Only in Prose
+- **Evidence:** `DESIGN.md` lines 200-218 (Universal Slice 0 artifacts), lines 625-637 (Huma routes / exception ledger).
+- **Why it matters:** The design hinges entirely on machine-readable manifests (`WORKER_BOUNDARY_EXCEPTIONS.yaml`, `SESSION_BOUNDARY_SYMBOLS.yaml`, `MIGRATION_COHABITATION.yaml`) to act as CI gates and prevent bypasses. However, a physical inspection of the workspace reveals that **none of these files exist** in the current checkout. An unmaterialized manifest cannot prevent drift or enforce boundaries; the design remains a paper tiger until these files are committed and validated.
 
-#### 2. [Major] Multi-Writer Concurrency and "Split-Brain" Risks During Transition
-- **Evidence:** `DESIGN.md` lines 418-422 (Worker/API exceptions), and lines 345-350 (Coexistence fences).
-- **Why it matters:** The design permits transitional "exceptions" where legacy raw writers and new fenced command appliers coexist. Specifically, `internal/api/session_resolution.go` constructs direct `session.Manager` instances and writes metadata directly, while new commands will utilize conditional updates. If a legacy writer performs a blind write (such as retiring an identity or updating a state) concurrently with or after a fenced write, it can silently clobber the fenced writer's updates.
-- **Mitigation:** The design must enforce that *no key family* may have active concurrent writers from both the legacy and the fenced command paths. The migration of any key family must be atomic across all active production surfaces.
+#### 2. [Blocker] Absence of VCS-Anchored Time / Drift Protections in Build-Enforced Expiries
+- **Evidence:** `DESIGN.md` lines 210-216, lines 263-267 ("expired exception row... relative to current system time").
+- **Why it matters:** The design mandates that Slice 0 validators fail if any exception row's `expiry` date is in the past relative to "current system time". Relying on ambient system clock time during local `go test` runs or pre-commit git hooks introduces a critical vulnerability: developers can bypass the build failure simply by drifting their local system clock backward, or isolated offline/CI environments with drifted clocks may falsely pass/fail.
+- **Mitigation:** Expiry validation must be anchored to a deterministic, monotonically increasing source of time within the repository (such as the timestamp of the latest git commit or a pinned VCS anchor timestamp), rather than raw ambient local system clock.
 
-#### 3. [Major] Vague Static Guard Matching Mechanism and Over-Matching False Positives
-- **Evidence:** `DESIGN.md` lines 319-322 and lines 331-332.
-- **Why it matters:** The static guard matching mechanism remains under-specified. If `TestSessionBoundaryGuard` performs syntactic string matching on `SetMetadata` or `SetMetadataBatch` to prevent raw session-key writes, it will over-match and fail on legitimate non-session metadata writes in the same files (such as `gc.routed_to`, `workflow_id`, or task-specific metadata on other domains). Conversely, if it is too loose, it can be bypassed by wrapping the store or using dynamic map construction.
-- **Mitigation:** Clarify that the key-family column in the symbols manifest is descriptive metadata for ownership, not the matcher. The linter must match by:
-  1. Forbidding external package imports of raw patch-map symbols and constructors (e.g. `ClosePatch`, `RetireNamedSessionPatch`, `MetadataPatch`).
-  2. Maintaining a strict, file-and-line-level exception inventory of approved raw `SetMetadata*` writers.
+#### 3. [Major] Severe Store-Level Race Vulnerability (TOCTOU) Across CLI/API/Controller Processes
+- **Evidence:** `DESIGN.md` lines 505-516 (coexistence fences) and lines 576-586 (store capability matrix).
+- **Why it matters:** `DESIGN.md` explicitly notes that `bdstore` "exposes separate read and write calls with no compare-and-swap, expected-revision, or token primitive, so no fence may be assumed". Despite admitting that "reread then write" is not a valid strategy due to TOCTOU races, the design still permits transitional cohabitation where legacy blind writers and new fenced command appliers coexist. Without store-level atomic primitives, any transaction or conditional write is an illusion, risking silent state clobbering across concurrent CLI/API/controller processes.
+- **Mitigation:** Reject any transitional coexistence for a given key-family. The migration of any key family must be atomic across all active production surfaces, or store-level CAS/transaction primitives must be prioritized.
 
-#### 4. [Major] Lack of Type-Level Closure Commit for Slices 3-5
-- **Evidence:** `DESIGN.md` lines 334-344 (guard scope) and lines 671-676 (backlog).
-- **Why it matters:** The design relies entirely on the static guard to prevent external patch map application, but it never commits to a type-level closure. As long as `type MetadataPatch map[string]string` remains a transparent alias, external callers can bypass constructors with raw map literals that static guards cannot easily catch.
-- **Mitigation:** The backlog must explicitly commit that Slices 3-5 will **unexport** the individual `*Patch` constructors and make `MetadataPatch` an opaque, package-private type applied only through session-owned methods.
+#### 4. [Major] Lack of Automated Linter Validation for Key Families on Direct Metadata Writes
+- **Evidence:** `DESIGN.md` lines 603-612 (routing rules and exceptions).
+- **Why it matters:** Direct metadata writes (e.g., `state` in `cmd_session_wake.go`) are planned as exceptions, but without an AST-based linter that parses Go code to check for specific key assignments, developers can easily add new unapproved direct writes by mimicking existing patterns.
+- **Mitigation:** The static guard matcher (`TestSessionBoundaryGuard`) must parse the AST of external packages to explicitly verify that any call to `SetMetadata` or `SetMetadataBatch` targeting session key-families is blocked unless its file and line are registered in `WORKER_BOUNDARY_EXCEPTIONS.yaml`.
 
 ---
 
 ### Missing evidence:
-- **Unhomed Identity Assignment Writes:** Slices 1-2 are read-only, slice 4 is identity *retirement*, but no slice in the backlog (lines 654-680) is homed to own identity *assignment* (the two `session_name` writers in `cmd/gc/session_name_lookup.go:227` and `cmd/gc/session_beads.go:1119`).
-- **Unmapped `RepairEmptyType` Sites:** There are exactly 16 call sites for `RepairEmptyType` across the codebase (including 2 in `internal/mail/beadmail/beadmail.go` and 4 in huma commands). The design-before document does not provide a concrete backlog mapping or completion criteria for retiring these sites.
-- **No Concrete Backlog Completion Criteria:** The backlog slices name high-level concepts but provide no concrete, file-or-symbol-level completion criteria to determine when a slice is complete and can be merged.
+- **No Concrete Backlog Mapping for `RepairEmptyType`:** While the design states that `RepairEmptyType` is retired from read-only paths, it still fails to list the 14 existing call sites or provide a concrete backlog mapping for their final retirement.
+- **No VCS Anchor in Expiry Validation:** No evidence is provided showing how build-enforced expiries prevent clock drift or local clock manipulation.
 
 ---
 
 ### Required changes:
-1. **Automate Validator Expiry Failures:** Add "ledger/exception row past its stated expiry" to the Slice 0 validator failure criteria (lines 181-184), making expiry dates build-enforced.
-2. **Commit to Type-Level Closure:** Explicitly commit in the backlog/Atomic Command text that Slices 3-5 will unexport the patch constructors and make `MetadataPatch` opaque.
-3. **Map and Home Identity Assignment:** Create or assign a backlog slice to own and migrate the two raw `session_name` identity-assignment call sites.
-4. **Enumerate `RepairEmptyType` Retires:** Enumerate the 16 `RepairEmptyType` sites in the symbols ledger and define their retirement slice/criteria in the backlog.
-5. **Detail the Guard Matcher:** Explicitly define the matching strategy of `TestSessionBoundaryGuard` to prevent false positives on non-session bead metadata writes.
+1. **Materialize the Draft Manifests:** Commit the initial schemas or empty instances of `WORKER_BOUNDARY_EXCEPTIONS.yaml`, `SESSION_BOUNDARY_SYMBOLS.yaml`, and `MIGRATION_COHABITATION.yaml` to the repository so the validators can run against actual files instead of prose.
+2. **Anchor Clock Validation to VCS:** Update the validator clock rule (`DESIGN.md:263-267`) to compare row expiry dates against a deterministic repository metadata timestamp (e.g., the last commit time) instead of ambient system time.
+3. **Commit to Atomic Store CAS/Transactions:** Prioritize adding a transaction or conditional-update primitive to the store before any mutating session-owned commands are merged.
+4. **Mandate AST-Based Key-Family Linter:** Explicitly define that `TestSessionBoundaryGuard` will use AST parsing to identify and block unauthorized direct writes to session-owned key families.
 
 ---
 
 ### Questions:
-- If a build fails due to an expired exception row in a critical path, what is the approved emergency procedure?
-- Is there any technical justification for keeping `MetadataPatch` exported in the final state, or is the end-goal a complete type-level closure?
+- If a build fails due to an expired exception row in a critical offline CI environment, what is the approved emergency procedure?
+- Is there an active ticket to introduce atomic compare-and-swap (CAS) primitives to `bdstore` before Slice 3 begins?
 
 ---
 
@@ -68,8 +61,8 @@ Lane: session lifecycle ownership, external metadata write audit, patch-map esca
 ### 1. Which production call sites still write lifecycle or identity metadata directly, and does each backlog slice name the call sites it removes?
 **Answer:** There are extensive direct lifecycle and identity metadata writers remaining, including:
 - Direct metadata writes (such as `state` and `pending_create_claim` in `cmd/gc/build_desired_state_test.go:4279-4285`).
-- External patch applications of `ClosePatch` (e.g. `cmd/gc/session_reconciler.go:206` and `cmd/gc/session_lifecycle_parallel.go:1823`).
-- External applications of `RetireNamedSessionPatch` (e.g. `cmd/gc/session_beads.go:444`, `:514`, `:1502` and `internal/api/session_resolution.go:171`).
+- External patch applications of `ClosePatch` (e.g., `cmd/gc/session_reconciler.go:206` and `cmd/gc/session_lifecycle_parallel.go:1823`).
+- External applications of `RetireNamedSessionPatch` (e.g., `cmd/gc/session_beads.go:444`, `:514`, `:1502` and `internal/api/session_resolution.go:171`).
 The backlog slices (lines 654-680) do **not** name the specific call sites or files they remove; the mapping is deferred to the Slice 0 symbols manifest, leaving the backlog too abstract to verify completion.
 
 ### 2. What failing-build guard prevents new non-session production code from applying session patch maps or SetMetadata lifecycle writes?
