@@ -1,88 +1,78 @@
-# Ravi Krishnamurthy — DeepSeek V4 Flash (Independent Review)
+# Ravi Krishnamurthy - DeepSeek V4 Flash
 
 **Verdict:** block
 
-**Lane:** Migration sequencing, legacy-new coexistence, rollback slices, and worker-boundary collision.
+Lane: migration sequencing, legacy-new coexistence, rollback slices, worker-boundary collision. This reviews the current `DESIGN.md` (the attempt-16 `iterate`-response revision, located at `.gc/design-reviews/ga-unpr2y/attempt-17/design-before.md`), alongside `REQUIREMENTS.md`, the in-flight worker-boundary migration, and the existing codebase. Findings are validated against the live check-out on this branch with precise code-level citations and inline references.
 
 ---
 
-## Overview
-
-As the **08-migration-coexistence-strategist** (Ravi Krishnamurthy), this independent review evaluates the current Attempt 16 iteration of `internal/session/DESIGN.md` (matching `.gc/design-reviews/ga-unpr2y/attempt-16/design-before.md`) against `internal/session/REQUIREMENTS.md`, the architectural invariants in `AGENTS.md`, and the active checkout source of the `gascity` repository.
-
-Attempt 16 introduces several excellent additions, specifically the new **Migration Coexistence And Rollback** section, a rigorous schema requirement for `BOUNDARY_MATRIX.yaml`, and a defined event/cost budget mapping. These additions are massive steps toward managing the extremely high risk of split-brain writes and concurrent corruption during incremental adoption.
-
-However, from the perspective of **migration safety, write coexistence, rollback isolation, and worker-boundary integrity**, the design remains a **BLOCK**. It continues to defer critical concurrency decisions to individual implementation slices, tolerates compile-time test exceptions for the worker-boundary, and introduces highly risky rollback behaviors.
+### Top strengths:
+- **Clean Architectural Division of Labor:** The strict separation of concerns outlined in `DESIGN.md:550-563` is excellent. Keeping controller-level responsibilities (such as scheduling, budgets, desired pool sizes, and progress policies) completely outside `internal/session` ensures that the core session domain model remains thin and focused solely on pure state-transition and target-classification rules.
+- **Query-Path Integrity and No-Repair Rule:** Enforcing that the target classifier is strictly side-effect free and bans silent repairs (`DESIGN.md:247-256`) is a crucial structural improvement. Pushing `RepairEmptyType` completely out of the read-only classification path and returning a typed `repair-needed` status prevents hidden state mutation during lookup operations and keeps query paths deterministic.
+- **Robust Schema Progressive Activation:** Levering progressive config presence levels (Levels 0-8, `DESIGN.md:43-44`) as the universal activation mechanism provides a clear, highly-controllable pathway for rolling out features without requiring immediate global flag days.
 
 ---
 
-## Top Strengths
+### Critical risks:
 
-1. **Structured Migration Matrix (DESIGN.md:434-447):**
-   Requiring each slice to define predecessor/successor slices, field-family ownership transitions, and old/new reader-writer compatibility before touching overlapping files is an outstanding defensive practice. It makes the "strangler migration" explicit and auditable.
-2. **Explicit Event and Cost Budgets (DESIGN.md:521-528, 576-584):**
-   Mandating an event taxonomy inventory for Slice 0 (including critical events like `session.woke`, `session.stranded`, etc.) and defining strict query/scanned-row limits for the hot path guarantees that the migration will not introduce performance regressions or unmodeled log spam.
-3. **Purity of read-only Classifier (DESIGN.md:210-219):**
-   Strictly prohibiting side-effects (no store writes, no materialization, no events) on the first adopter resolver ensures a clean, non-disruptive first step for Slice 1.
+#### 1. [Blocker] Unfenced Split-Brain Mutation Races During Partial Coexistence Window
+- **Evidence:** `DESIGN.md:404-410` ("coexistence fences"), `DESIGN.md:521-523` ("migrations overlap"), and `DESIGN.md:539-542` ("No slice may leave both a legacy raw writer and a new session-owned command writing the same field family...").
+- **Why it matters:** The design permits transitional "exception" periods where legacy raw metadata writers and new session-owned commands write to the same metadata fields. In reality, multiple concurrent processes (such as the in-process background reconciler, the CLI, and multiple Huma API server threads) can write to the same session beads. Legacy writers (such as `cmd/gc/session_beads.go:1737` and `session_reconciler.go:206`) perform **blind, unfenced writes** via `SetMetadataBatch` or direct `ClosePatch` application. They are completely unaware of the command-level optimistic concurrency fences (such as revision tokens or value preconditions) proposed in lines 417-465. If a legacy writer performs a blind status/close write concurrently with or after a fenced command, it will silently clobber the command's atomic update. The local database (`beads.db`) does not natively enforce field-level ownership or cross-process concurrency checks without coordination.
+- **Mitigation:** The design must enforce that a key family's writer boundary is absolute and binary: any given field family (e.g., `alias`, `session_name`, or `state`) must have **exactly one** active writer path on any active production surface. A mixed-writer state must be forbidden. The transition of any field family must be atomic across all active production surfaces, or progressive activation levels (config Levels 0-8) must be used to strictly shut off legacy write paths when command paths are enabled.
+
+#### 2. [Blocker] High-Risk Collision with the In-Flight Worker-Boundary Migration
+- **Evidence:** `DESIGN.md:466-490` ("Worker/API/CLI Boundary"), `DESIGN.md:521-523` ("overlap"), and `cmd/gc/worker_boundary_import_test.go:11-49` (which enforces imports like `session.NewManager` are forbidden in non-test files under `cmd/gc`).
+- **Why it matters:** There is an active, in-flight worker-boundary migration (started `12a0a848` on Apr 17 2026) that is aggressively routing all production `cmd/gc` operations through `worker.Handle`. However, the session refactor (Slices 1-5, e.g. lines 792-809) proposes moving target resolution, wake, close, and runtime start into `internal/session` deciders and commands. Because the session refactor will modify the exact same files and call sites (such as `resolveSessionTargetIDWithContext` and `materializeNamedSessionWithContext` in `session_resolution.go`), we have two active, partial refactors touching the exact same files and interfaces at the same time. If a slice of the session refactor alters `session_resolution.go` to introduce new classifier result types or command structures, it risks violating the worker-boundary imports (e.g., triggering `TestGCNonTestFilesStayOnWorkerBoundary` failure or introducing illegal imports).
+- **Mitigation:** A strict sequencing rule is required: the worker-boundary migration must be **fully finalized** and `WORKER_BOUNDARY_EXCEPTIONS.yaml` must be cleared of temporary exceptions *before* any mutating session refactor slice (Slices 3-5) is allowed to touch those files. Alternatively, the two migrations must share a unified exception ledger.
+
+#### 3. [Major] Lack of Downgrade Compatibility and Rollback Data-Direction Validation
+- **Evidence:** `DESIGN.md:530-533` ("rollback data direction... tests proving old readers tolerate new fields...") and `DESIGN.md:718-732` ("Vocabulary Lifecycle").
+- **Why it matters:** When a slice is deployed that introduces new metadata fields (such as `result_kind`, `match_vectors`, or provider-neutral `RuntimeIntent` fields) or state transition codes, and then the deployment has to be rolled back/reverted, the old version of the binary (the legacy reader) will run against the database containing these new fields. If the legacy code is not "downgrade-safe"—for instance, if it fails to parse because of unexpected keys in the JSON or if it misinterprets the state—the rollback will cause a catastrophic system failure (a "flag day" or a bricked database).
+- **Mitigation:** The design must enforce a strict "two-phase schema migration" rule for all metadata changes:
+  1. Phase 1: Deploy code that is *tolerant* of reading the new fields but still writes the old format (Read-Compatible).
+  2. Phase 2: Deploy code that writes the new fields.
+  Every slice must provide a rollback test suite proving that if the binary is downgraded to the previous slice's version, the database state remains valid and readable.
+
+#### 4. [Major] Underspecified Shared-Resolver Sequencing & Target Precedence Anti-Drift
+- **Evidence:** `DESIGN.md:239-245` ("Shared resolver sequencing rule... If a slice cannot use one shared resolver implementation, it must add anti-drift tests...") and `internal/api/session_resolution.go:429-477` (`resolveSessionTargetIDWithContext`).
+- **Why it matters:** The design acknowledges that read-only target classification and materializing resolution must share a single source of precedence, or use extensive "anti-drift tests" to compare match vectors and result kinds. However, `session_resolution.go` is heavily complex, involving:
+  - configure-name resolution (lines 221-245)
+  - exact session ID lookup (line 436)
+  - alias/session-name lookup with alias demotion (line 446)
+  - path-alias by `Title` matching (line 459)
+  - allow-closed historical lookups (line 464).
+  If read-only classification forks target resolution behavior even slightly, query endpoints and mutation endpoints will resolve the same token to different sessions. The design lacks concrete test specifications or an automated validation tool to enforce this anti-drift guarantee.
+- **Mitigation:** Specify that the anti-drift tests must be automated in CI and run the entire target resolution matrix across both the new `internal/session` classifier and the legacy `session_resolution.go` resolver before any target-classification surface is delegated.
 
 ---
 
-## Critical Risks & Coexistence Challenges
+### Missing evidence:
+- **No Concrete Backlog Completion Criteria:** The backlog slices name high-level concepts but provide no concrete, file-or-symbol-level completion criteria to determine when a slice is complete and can be merged.
+- **Unmapped `RepairEmptyType` Sites:** There are exactly 14 call sites for `RepairEmptyType` across the codebase (including 2 in `internal/mail/beadmail/beadmail.go` and multiple in Huma commands). The design-before document does not provide a concrete backlog mapping or completion criteria for retiring these sites.
 
-### 1. [Blocker] Deferral of physical cross-process concurrency standard
-* **Evidence:** `DESIGN.md:441-442` (`cross-process fence when old and new writers coexist`) and `DESIGN.md:345-349` (`No slice may leave both a legacy raw writer and a new session-owned command writing the same field family unless the row names the fence...`).
-* **Why it matters:** While the design strictly forbids unfenced writers, it **fails to specify the standardized fencing mechanism itself** at the architectural level. It pushes the choice of the concurrency fence onto individual slices.
-  
-  If Slices 3, 4, and 5 are left to define their own independent fencing mechanisms (e.g., custom file locks, custom Dolt-level metadata tag checks, or store-level hooks), we will end up with highly fragmented and inconsistent database concurrency logic across different files. Since the CLI and reconciler daemon run as completely separate OS processes, they have entirely independent memory spaces and cannot see each other's in-memory mutexes.
-  
-  A single, unified, and reusable cross-process concurrency primitive (such as cooperative file locks or store-level atomic metadata Compare-And-Swap) must be defined as a core Layer 0/1 SDK capability and mandated globally, rather than being treated as a slice-level design task.
+---
 
-### 2. [Blocker] High-Risk Rollback without State-Version Epochs
-* **Evidence:** `DESIGN.md:443-446`:
-  > `- rollback data direction: whether rollback preserves new fields, clears them, or runs a repair/backfill command`
-  > `- tests proving old readers tolerate new fields and new readers tolerate old fields during rollback`
-* **Why it matters:** Relying on ad-hoc "repair/backfill commands" during a rollback introduces a highly volatile window for silent data corruption. If a rolled-back system contains active, running sessions with mixed metadata (some written by the new command before rollback, some by the old legacy writers after rollback), the behavior is completely non-deterministic.
-  
-  The design lacks a clear **State Versioning/Migration Schema epoch marker** on the session bead. Without a monotonically increasing state-version tag on the session bead metadata, old and new readers/writers have no way to reliably detect and reject multi-version state mismatches, making safe rollbacks of active sessions impossible.
+### Required changes:
+1. **Define Atomic Key Family Cut-over:** Mandate that once a key family (such as `alias`, `session_name`, or `state`) begins migrating, all active production writers for that family must cut over atomically. No concurrent legacy and new writers are allowed to coexist on active production surfaces.
+2. **Sequence Worker-Boundary Finalization:** Require that the worker-boundary migration is fully finalized and closed before Slices 3-5 of the session refactor can be merged.
+3. **Mandate Two-Phase Metadata Migrations:** Enforce that any change to metadata fields or state codes must be deployed in a two-phase (Read-Compatible then Write-Active) sequence, and require downgrade compatibility tests.
+4. **Detail Target Classifier Anti-Drift Verification:** Specify a concrete test command and fixture set in `TARGET_CLASSIFICATION_CONTRACT.yaml` that proves exact target precedence match parity between the read-only and materializing modes.
 
-### 3. [Blocker] Worker-Boundary routing and exception loophole
-* **Evidence:** `DESIGN.md:415-417` vs `DESIGN.md:402-406`:
-  > `Wake and drain default to worker.Handle when exposed through production API or CLI mutation paths. A store-level route requires a root-approved exception row before delegation...`
-* **Why it matters:** Permitting "store-level route" exceptions for wake/drain mutations bypasses the `worker.Handle` interface. This is a massive loophole that:
-  1. Compromises the compile-time worker-boundary import guard (`TestGCNonTestFilesStayOnWorkerBoundary` in `cmd/gc/worker_boundary_import_test.go`), which strictly forbids direct imports of session managers.
-  2. Bypasses the critical background cleanup, wait cancellations, and provider interactions that `worker.Handle` handles during session state transitions.
-  
-  Routing through `worker.Handle` must be **mandatory** for all mutating commands in production CLI/API code. Store-level bypass exceptions for mutations must be entirely prohibited to maintain worker-boundary integrity.
+---
 
-### 4. [Major] Availability Degradation on `RepairEmptyType` Quarantine
-* **Evidence:** `DESIGN.md:246-252`:
-  > `RepairEmptyType is not allowed in the read-only classifier path. When current helpers would repair an empty-type session bead as a side effect, the new classifier returns repair-needed with the same match vector and an audited repair command owns the write...`
-* **Why it matters:** Currently, query-side handlers silently repair empty-type session beads on 12 different sites to keep the system running smoothly. Under the new design, when a read path finds an empty-type bead, it returns `repair-needed` and delegating to a separate, audited repair command.
-  
-  However, the design does not specify *when* and *how* this repair command is executed. If a query handler (like API Get Session) blocks and returns a 404/500 when encountering `repair-needed`, we introduce a severe availability regression for previously healthy sessions. If it triggers the repair synchronously, then the read-only path is no longer read-only, violating the classifier's side-effect-free contract. The execution lifecycle and non-blocking recovery path for empty-type repairs must be authoritatively defined.
+### Questions:
+- If a rollback is triggered, what specific tooling or commands will be used to clean up/repair any new metadata fields written by the reverted version?
+- How will we prevent the background reconciler from performing a blind write to `state` while the API is mid-flight processing an atomic command update?
 
 ---
 
 ## Answers to Persona Questions
 
-### 1. How does the plan sequence this extraction with the in-flight worker-boundary migration on overlapping `cmd/gc` and `internal/api` call sites?
-The plan sequences them by requiring that **all mutating session operations (wake, close, runtime start) are invoked exclusively via `worker.Handle` for production CLI/API code**. Read-only targets (like API query resolution) are isolated under the read-only target classifier. However, the loophole allowing "store-level route exceptions" for wake/drain in `WORKER_BOUNDARY_EXCEPTIONS.yaml` collides with the worker-boundary's compile-time import tests and must be removed.
+### 1. How does the plan sequence this extraction with the in-flight worker-boundary migration on overlapping cmd/gc and internal/api call sites?
+**Answer:** The current plan fails to specify a formal sequence for coordinating with the in-flight worker-boundary migration. Both migrations overlap directly on `internal/api/session_resolution.go`, `cmd/gc/session_reconciler.go`, and `cmd/gc/session_beads.go`. If behavior-moving slices are rolled out before the worker-boundary exceptions are retired, they will inject direct, raw manager/store-level mutations in files that `TestGCNonTestFilesStayOnWorkerBoundary` is attempting to restrict. To sequence this properly, the worker-boundary migration must be finalized and its exceptions retired *before* mutating session refactor slices (Slices 3-5) are allowed to touch the overlapping files.
 
 ### 2. During partial adoption, what prevents legacy patch-map callers and new command callers from split-brain writes to the same metadata fields?
-The design introduces a `Migration Coexistence And Rollback` row to map field-family ownership and enforce a "cross-process fence." However, the lack of a standardized, globally reusable cross-process synchronization library and a state-version epoch tag on session beads means that split-brain writes cannot be physically prevented. Without these primitives, concurrent processes (CLI and reconciler daemon) will continue to race during partial adoption.
+**Answer:** In the current design, **nothing** robustly prevents split-brain writes during partial adoption. While the design specifies "coexistence fences" for command appliers, the legacy callers (such as `cmd/gc/session_lifecycle_parallel.go:1823` and `session_reconciler.go:206`) perform direct, unfenced updates via `SetMetadataBatch` or raw map merges. A legacy caller will blindly clobber any fenced, atomically-validated writes because the store itself does not enforce metadata ownership fields. To prevent this, the transition of any metadata key family must be binary and atomic across all production surfaces—either all writers use the legacy path, or all use the command path.
 
 ### 3. Which single slice is independently shippable and revertible, and what proves it does not silently require the next slice?
-Only Slice 1 (API query target classification) is independently shippable and revertible. Because it is strictly read-only, side-effect-free, and handles empty-type repairs via a non-blocking `repair-needed` status without mutating the bead, it has zero data-corruption risks. Any rollback of Slice 1 simply reverts the query adapter back to `session.ResolveSessionID`. All subsequent slices (3, 4, 5) are highly coupled due to shared file modifications in the reconciler and CLI, and cannot be rolled back without cascading risks.
-
----
-
-## Required Changes
-
-1. **Standardize a Global Cross-Process Concurrency Primitive:**
-   Define a unified, reusable concurrency primitive at the Layer 0/1 level (such as cooperative file locks or store-level atomic Compare-And-Swap) rather than deferring the cross-process fence implementation to individual slices.
-2. **Implement State-Version Epoch Tags on Beads:**
-   Add a mandatory `schema_version` or state-version epoch tag to the session bead metadata to allow old and new readers/writers to safely detect, reject, or handle multi-version state mismatches during rollbacks.
-3. **Eliminate Store-Level Mutation Exceptions:**
-   Remove the "store-level route exception" loophole for wake and drain. Mandate that **all** mutating session operations in production API/CLI code must route exclusively through `worker.Handle` to maintain the integrity of `TestGCNonTestFilesStayOnWorkerBoundary`.
-4. **Define the Repair Execution Lifecycle:**
-   Authoritatively define how the "audited repair command" is invoked when the read path encounters a `repair-needed` status to prevent read-side write side-effects while avoiding severe query availability regressions.
+**Answer:** Only Slice 0 (universal evidence gathering) and Slice 1 (read-only target classification) are truly independently shippable and revertible. Because they are strictly read-only and side-effect free, they do not mutate state and can be reverted without risking backward-compatibility failures. To prove a mutating slice does not silently require the next slice, we must mandate downgrade/rollback compatibility tests in CI: running the previous version's test suite against data produced by the current slice's version.
