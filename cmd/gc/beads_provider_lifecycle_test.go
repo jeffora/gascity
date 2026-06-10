@@ -10049,7 +10049,7 @@ dolt.auto-start: false
 func TestStartBeadsLifecycleFailsOnCanonicalCompatDoltDrift(t *testing.T) {
 	cityPath := t.TempDir()
 	callLog := filepath.Join(cityPath, "op-calls.log")
-	script := gcBeadsBdScriptPath(cityPath)
+	script := filepath.Join(t.TempDir(), "gc-beads-bd.sh")
 	if err := os.MkdirAll(filepath.Dir(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -10399,7 +10399,7 @@ exit 0
 func TestHealthBeadsProviderDoesNotRecoverExternalLoopbackTarget(t *testing.T) {
 	cityPath := t.TempDir()
 	callLog := filepath.Join(cityPath, "op-calls.log")
-	script := gcBeadsBdScriptPath(cityPath)
+	script := filepath.Join(t.TempDir(), "gc-beads-bd.sh")
 	if err := os.MkdirAll(filepath.Dir(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -10446,7 +10446,7 @@ dolt.port: "4406"
 func TestShutdownBeadsProviderSkipsExternalLoopbackTarget(t *testing.T) {
 	cityPath := t.TempDir()
 	callLog := filepath.Join(cityPath, "op-calls.log")
-	script := gcBeadsBdScriptPath(cityPath)
+	script := filepath.Join(t.TempDir(), "gc-beads-bd.sh")
 	if err := os.MkdirAll(filepath.Dir(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -10478,7 +10478,7 @@ dolt.port: "4406"
 func TestShutdownBeadsProviderExternalBdClearsStaleManagedRuntimeState(t *testing.T) {
 	cityPath := t.TempDir()
 	callLog := filepath.Join(cityPath, "op-calls.log")
-	script := gcBeadsBdScriptPath(cityPath)
+	script := filepath.Join(t.TempDir(), "gc-beads-bd.sh")
 	if err := os.MkdirAll(filepath.Dir(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -11495,7 +11495,7 @@ func writeBreakerAwarePreflightFakes(t *testing.T, cityPath, healthStderr string
 		t.Fatal(err)
 	}
 	opsFile := filepath.Join(t.TempDir(), "provider-ops.log")
-	script := gcBeadsBdScriptPath(cityPath)
+	script := filepath.Join(t.TempDir(), "gc-beads-bd.sh")
 	if err := os.MkdirAll(filepath.Dir(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -11518,6 +11518,7 @@ esac
 	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	t.Setenv("GC_BEADS", "exec:"+script)
 	return opsFile
 }
 

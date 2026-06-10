@@ -12,6 +12,7 @@ agent="$1"
 # reachable, status-line continues without tracing.
 __bd_trace_helper=""
 for __cand in \
+    "${GC_PACK_DIR:-}/../maintenance/assets/scripts/_bd_trace.sh" \
     "${GC_CITY_PATH:-}/.gc/system/packs/maintenance/assets/scripts/_bd_trace.sh" \
     "${GC_CITY:-}/.gc/system/packs/maintenance/assets/scripts/_bd_trace.sh"; do
     if [ -n "$__cand" ] && [ -f "$__cand" ]; then

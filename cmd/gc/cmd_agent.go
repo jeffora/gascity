@@ -62,10 +62,10 @@ func loadCityConfigFS(fs fsys.FS, tomlPath string, warningWriter ...io.Writer) (
 }
 
 // loadCityConfigWithoutBuiltinPackRefreshFS loads config using builtin packs
-// that are already materialized on disk. Completion paths use this to avoid
-// forcing refresh work on every shell invocation. That means completion may
-// briefly reflect stale builtin-pack content after an upgrade until a normal
-// gc command refreshes the generated packs.
+// that are already present in the shared bundled cache. Completion paths use
+// this to avoid forcing cache refresh work on every shell invocation. That means
+// completion may briefly reflect stale builtin-pack content after an upgrade
+// until a normal gc command refreshes the generated packs.
 func loadCityConfigWithoutBuiltinPackRefreshFS(fs fsys.FS, tomlPath string, warningWriter ...io.Writer) (*config.City, error) {
 	var extras []string
 	if usesOSFS(fs) {

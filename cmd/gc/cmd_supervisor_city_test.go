@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -18,6 +19,8 @@ import (
 	"github.com/gastownhall/gascity/internal/citylayout"
 	"github.com/gastownhall/gascity/internal/config"
 	"github.com/gastownhall/gascity/internal/events"
+	"github.com/gastownhall/gascity/internal/fsys"
+	"github.com/gastownhall/gascity/internal/packman"
 	"github.com/gastownhall/gascity/internal/runtime"
 	"github.com/gastownhall/gascity/internal/supervisor"
 )
@@ -464,9 +467,10 @@ func TestEffectiveCityNameUsesWorkspaceSiteBinding(t *testing.T) {
 	}
 }
 
-func writeCityWithUnmaterializedGastownImport(t *testing.T) string {
+func writeCityWithBuiltinGastownImport(t *testing.T) string {
 	t.Helper()
 
+	t.Setenv("HOME", t.TempDir())
 	cityPath := filepath.Join(t.TempDir(), "bright-lights")
 	if err := os.MkdirAll(filepath.Join(cityPath, ".gc"), 0o755); err != nil {
 		t.Fatal(err)
@@ -474,21 +478,53 @@ func writeCityWithUnmaterializedGastownImport(t *testing.T) string {
 	if err := os.WriteFile(filepath.Join(cityPath, "city.toml"), []byte("[workspace]\nname = \"bright-lights\"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	packToml := `[pack]
+	packToml := fmt.Sprintf(`[pack]
 name = "bright-lights"
 schema = 2
 
 [imports.gastown]
-source = ".gc/system/packs/gastown"
-`
+source = %q
+version = %q
+`, config.PublicGastownPackSource, config.PublicGastownPackVersion)
 	if err := os.WriteFile(filepath.Join(cityPath, "pack.toml"), []byte(packToml), 0o644); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(cityPath, packman.LockfileName)); !os.IsNotExist(err) {
+		t.Fatalf("%s should not exist before config load, stat err = %v", packman.LockfileName, err)
 	}
 	return cityPath
 }
 
-func TestEffectiveCityNameMaterializesBuiltinPackImportsBeforeLoad(t *testing.T) {
-	cityPath := writeCityWithUnmaterializedGastownImport(t)
+func assertGastownBuiltinCacheForCity(t *testing.T, cityPath string, cfg *config.City) string {
+	t.Helper()
+
+	if _, err := os.Stat(filepath.Join(cityPath, citylayout.SystemPacksRoot)); !os.IsNotExist(err) {
+		t.Fatalf("city-local builtin pack root exists after config load: %v", err)
+	}
+	lock, err := readImportLockfile(fsys.OSFS{}, cityPath)
+	if err != nil {
+		t.Fatalf("read %s: %v", packman.LockfileName, err)
+	}
+	pack, ok := lock.Packs[config.PublicGastownPackSource]
+	if !ok {
+		t.Fatalf("%s missing builtin gastown lock entry: %#v", packman.LockfileName, lock.Packs)
+	}
+	if pack.Commit != strings.TrimPrefix(config.PublicGastownPackVersion, "sha:") {
+		t.Fatalf("gastown lock commit = %q, want %q", pack.Commit, strings.TrimPrefix(config.PublicGastownPackVersion, "sha:"))
+	}
+
+	packPath := builtinPackDirFromPackDirs(cfg.PackDirs, "gastown")
+	if packPath == "" {
+		t.Fatalf("resolved pack dirs missing gastown builtin: %v", cfg.PackDirs)
+	}
+	if _, err := os.Stat(filepath.Join(packPath, "pack.toml")); err != nil {
+		t.Fatalf("expected gastown builtin cache at %s: %v", packPath, err)
+	}
+	return packPath
+}
+
+func TestEffectiveCityNameCachesBuiltinPackImportsBeforeLoad(t *testing.T) {
+	cityPath := writeCityWithBuiltinGastownImport(t)
 
 	name, err := effectiveCityName(cityPath)
 	if err != nil {
@@ -497,13 +533,15 @@ func TestEffectiveCityNameMaterializesBuiltinPackImportsBeforeLoad(t *testing.T)
 	if name != "bright-lights" {
 		t.Fatalf("effectiveCityName = %q, want %q", name, "bright-lights")
 	}
-	if _, err := os.Stat(filepath.Join(cityPath, citylayout.SystemPacksRoot, "gastown", "pack.toml")); err != nil {
-		t.Fatalf("expected gastown builtin pack to be materialized before config load: %v", err)
+	cfg, _, err := loadCityConfigWithBuiltinPacks(cityPath)
+	if err != nil {
+		t.Fatalf("loadCityConfigWithBuiltinPacks returned error: %v", err)
 	}
+	assertGastownBuiltinCacheForCity(t, cityPath, cfg)
 }
 
-func TestLoadSupervisorCityConfigMaterializesBuiltinPackImportsBeforeLoad(t *testing.T) {
-	cityPath := writeCityWithUnmaterializedGastownImport(t)
+func TestLoadSupervisorCityConfigCachesBuiltinPackImportsBeforeLoad(t *testing.T) {
+	cityPath := writeCityWithBuiltinGastownImport(t)
 
 	cfg, _, err := loadSupervisorCityConfig(cityPath)
 	if err != nil {
@@ -512,13 +550,11 @@ func TestLoadSupervisorCityConfigMaterializesBuiltinPackImportsBeforeLoad(t *tes
 	if cfg.Workspace.Name != "bright-lights" {
 		t.Fatalf("workspace name = %q, want %q", cfg.Workspace.Name, "bright-lights")
 	}
-	if _, err := os.Stat(filepath.Join(cityPath, citylayout.SystemPacksRoot, "gastown", "pack.toml")); err != nil {
-		t.Fatalf("expected gastown builtin pack to be materialized before supervisor config load: %v", err)
-	}
+	assertGastownBuiltinCacheForCity(t, cityPath, cfg)
 }
 
-func TestLoadStartCityConfigMaterializesBuiltinPackImportsBeforeLoad(t *testing.T) {
-	cityPath := writeCityWithUnmaterializedGastownImport(t)
+func TestLoadStartCityConfigCachesBuiltinPackImportsBeforeLoad(t *testing.T) {
+	cityPath := writeCityWithBuiltinGastownImport(t)
 
 	cfg, _, err := loadStartCityConfig(cityPath)
 	if err != nil {
@@ -527,13 +563,11 @@ func TestLoadStartCityConfigMaterializesBuiltinPackImportsBeforeLoad(t *testing.
 	if cfg.Workspace.Name != "bright-lights" {
 		t.Fatalf("workspace name = %q, want %q", cfg.Workspace.Name, "bright-lights")
 	}
-	if _, err := os.Stat(filepath.Join(cityPath, citylayout.SystemPacksRoot, "gastown", "pack.toml")); err != nil {
-		t.Fatalf("expected gastown builtin pack to be materialized before start config load: %v", err)
-	}
+	assertGastownBuiltinCacheForCity(t, cityPath, cfg)
 }
 
 func TestLoadStartCityConfigBuiltinGastownMayorHasNoStartupNudge(t *testing.T) {
-	cityPath := writeCityWithUnmaterializedGastownImport(t)
+	cityPath := writeCityWithBuiltinGastownImport(t)
 
 	cfg, _, err := loadStartCityConfig(cityPath)
 	if err != nil {
@@ -554,17 +588,18 @@ func TestLoadStartCityConfigBuiltinGastownMayorHasNoStartupNudge(t *testing.T) {
 		t.Fatalf("builtin gastown mayor nudge = %q, want empty for always-on resident coordinator", mayor.Nudge)
 	}
 
-	data, err := os.ReadFile(filepath.Join(cityPath, citylayout.SystemPacksRoot, "gastown", "agents", "mayor", "agent.toml"))
+	packPath := assertGastownBuiltinCacheForCity(t, cityPath, cfg)
+	data, err := os.ReadFile(filepath.Join(packPath, "agents", "mayor", "agent.toml"))
 	if err != nil {
-		t.Fatalf("read materialized mayor agent.toml: %v", err)
+		t.Fatalf("read cached mayor agent.toml: %v", err)
 	}
 	if strings.Contains(string(data), "nudge =") {
-		t.Fatalf("materialized builtin mayor agent.toml should not contain a startup nudge:\n%s", string(data))
+		t.Fatalf("cached builtin mayor agent.toml should not contain a startup nudge:\n%s", string(data))
 	}
 }
 
-func TestLoadSlingCityConfigMaterializesBuiltinPackImportsBeforeLoad(t *testing.T) {
-	cityPath := writeCityWithUnmaterializedGastownImport(t)
+func TestLoadSlingCityConfigCachesBuiltinPackImportsBeforeLoad(t *testing.T) {
+	cityPath := writeCityWithBuiltinGastownImport(t)
 
 	cfg, _, err := loadSlingCityConfig(cityPath)
 	if err != nil {
@@ -573,13 +608,11 @@ func TestLoadSlingCityConfigMaterializesBuiltinPackImportsBeforeLoad(t *testing.
 	if cfg.Workspace.Name != "bright-lights" {
 		t.Fatalf("workspace name = %q, want %q", cfg.Workspace.Name, "bright-lights")
 	}
-	if _, err := os.Stat(filepath.Join(cityPath, citylayout.SystemPacksRoot, "gastown", "pack.toml")); err != nil {
-		t.Fatalf("expected gastown builtin pack to be materialized before sling config load: %v", err)
-	}
+	assertGastownBuiltinCacheForCity(t, cityPath, cfg)
 }
 
-func TestLoadConfigCommandCityConfigMaterializesBuiltinPackImportsBeforeLoad(t *testing.T) {
-	cityPath := writeCityWithUnmaterializedGastownImport(t)
+func TestLoadConfigCommandCityConfigCachesBuiltinPackImportsBeforeLoad(t *testing.T) {
+	cityPath := writeCityWithBuiltinGastownImport(t)
 
 	cfg, _, err := loadConfigCommandCityConfig(cityPath)
 	if err != nil {
@@ -588,15 +621,13 @@ func TestLoadConfigCommandCityConfigMaterializesBuiltinPackImportsBeforeLoad(t *
 	if cfg.Workspace.Name != "bright-lights" {
 		t.Fatalf("workspace name = %q, want %q", cfg.Workspace.Name, "bright-lights")
 	}
-	if _, err := os.Stat(filepath.Join(cityPath, citylayout.SystemPacksRoot, "gastown", "pack.toml")); err != nil {
-		t.Fatalf("expected gastown builtin pack to be materialized before config command load: %v", err)
-	}
+	assertGastownBuiltinCacheForCity(t, cityPath, cfg)
 }
 
-func TestRegisterCityWithSupervisorNameOverrideMaterializesBuiltinPackImports(t *testing.T) {
+func TestRegisterCityWithSupervisorNameOverrideCachesBuiltinPackImports(t *testing.T) {
 	gcHome := t.TempDir()
 	t.Setenv("GC_HOME", gcHome)
-	cityPath := writeCityWithUnmaterializedGastownImport(t)
+	cityPath := writeCityWithBuiltinGastownImport(t)
 
 	withSupervisorTestHooks(
 		t,
@@ -613,9 +644,11 @@ func TestRegisterCityWithSupervisorNameOverrideMaterializesBuiltinPackImports(t 
 	if code != 0 {
 		t.Fatalf("registerCityWithSupervisorNamed code = %d, want 0: %s", code, stderr.String())
 	}
-	if _, err := os.Stat(filepath.Join(cityPath, citylayout.SystemPacksRoot, "gastown", "pack.toml")); err != nil {
-		t.Fatalf("expected gastown builtin pack to be materialized before alias registration: %v", err)
+	cfg, _, err := loadCityConfigWithBuiltinPacks(cityPath)
+	if err != nil {
+		t.Fatalf("loadCityConfigWithBuiltinPacks returned error: %v", err)
 	}
+	assertGastownBuiltinCacheForCity(t, cityPath, cfg)
 }
 
 func TestRegisterCityWithSupervisorRejectsStandaloneController(t *testing.T) {

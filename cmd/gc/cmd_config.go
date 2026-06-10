@@ -27,10 +27,10 @@ func loadCityConfigWithBuiltinPacks(cityPath string, includes ...string) (*confi
 }
 
 func cityConfigIncludesWithBuiltinPacks(cityPath string, includes ...string) ([]string, error) {
-	if err := MaterializeBuiltinPacks(cityPath); err != nil {
-		return nil, fmt.Errorf("materializing builtin packs: %w", err)
+	builtinIncludes, err := builtinPackIncludesForConfigLoad(fsys.OSFS{}, filepath.Join(cityPath, "city.toml"), io.Discard)
+	if err != nil {
+		return nil, fmt.Errorf("loading builtin packs: %w", err)
 	}
-	builtinIncludes := builtinPackIncludes(cityPath)
 	allIncludes := make([]string, 0, len(includes)+len(builtinIncludes))
 	allIncludes = append(allIncludes, includes...)
 	allIncludes = append(allIncludes, builtinIncludes...)

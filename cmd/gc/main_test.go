@@ -3951,8 +3951,12 @@ scale_check = "echo 3"
 	if !strings.HasSuffix(mayor.PromptTemplate, filepath.Join("agents", "mayor", "prompt.template.md")) {
 		t.Errorf("mayor.PromptTemplate = %q, want suffix %q", mayor.PromptTemplate, filepath.Join("agents", "mayor", "prompt.template.md"))
 	}
-	if !strings.HasSuffix(dog.PromptTemplate, filepath.Join(".gc", "system", "packs", "maintenance", "agents", "dog", "prompt.template.md")) {
-		t.Errorf("dog.PromptTemplate = %q, want maintenance dog prompt", dog.PromptTemplate)
+	wantDogSuffix := filepath.Join("examples", "gastown", "packs", "maintenance", "agents", "dog", "prompt.template.md")
+	if !strings.HasSuffix(dog.PromptTemplate, wantDogSuffix) {
+		t.Errorf("dog.PromptTemplate = %q, want suffix %q", dog.PromptTemplate, wantDogSuffix)
+	}
+	if strings.Contains(dog.PromptTemplate, filepath.Join(".gc", "system", "packs")) {
+		t.Errorf("dog.PromptTemplate = %q, should resolve through bundled cache instead of city-local system packs", dog.PromptTemplate)
 	}
 
 	packData, err := os.ReadFile(filepath.Join(cityPath, "pack.toml"))
@@ -6828,12 +6832,10 @@ max = 3
 }
 
 func TestDoPrimePoolAgentFallback(t *testing.T) {
-	// An explicit pool agent with no prompt_template reads the materialized
-	// pool-worker prompt from the materialized core system pack.
+	// An explicit pool agent with no prompt_template reads the pool-worker
+	// prompt from the cache-backed core builtin pack.
 	dir := t.TempDir()
-	if err := materializeBuiltinPrompts(dir); err != nil {
-		t.Fatalf("materializeBuiltinPrompts: %v", err)
-	}
+	t.Setenv("HOME", t.TempDir())
 	tomlContent := `[workspace]
 name = "test-city"
 
@@ -6875,13 +6877,14 @@ max = -1
 	if !strings.Contains(out, "GUPP") {
 		t.Error("pool-worker prompt missing GUPP")
 	}
+	if _, err := os.Stat(filepath.Join(dir, citylayout.SystemPacksRoot)); !os.IsNotExist(err) {
+		t.Fatalf("system packs root exists after gc prime: %v", err)
+	}
 }
 
 func TestDoPrimeFormulaV2GraphWorkerPromptClaimsRoutedWork(t *testing.T) {
 	dir := t.TempDir()
-	if err := materializeBuiltinPrompts(dir); err != nil {
-		t.Fatalf("materializeBuiltinPrompts: %v", err)
-	}
+	t.Setenv("HOME", t.TempDir())
 	t.Setenv("GC_CITY", "")
 	t.Setenv("GC_CITY_PATH", "")
 	t.Setenv("GC_CITY_ROOT", "")
@@ -6931,10 +6934,9 @@ max = -1
 	if strings.Contains(out, "bd update <id> --claim") || strings.Contains(out, `ROOT_ID=$(bd show <id> --json`) {
 		t.Fatalf("graph-worker prompt still contains duplicated shell claim protocol:\n%s", out)
 	}
-}
-
-func materializeBuiltinPrompts(cityPath string) error {
-	return MaterializeBuiltinPacks(cityPath)
+	if _, err := os.Stat(filepath.Join(dir, citylayout.SystemPacksRoot)); !os.IsNotExist(err) {
+		t.Fatalf("system packs root exists after gc prime: %v", err)
+	}
 }
 
 func TestDoPrimeHookDoesNotCreateRuntimeSessionSidecar(t *testing.T) {

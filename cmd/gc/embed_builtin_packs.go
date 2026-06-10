@@ -13,12 +13,15 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/BurntSushi/toml"
 	"github.com/gastownhall/gascity/internal/builtinpacks"
 	"github.com/gastownhall/gascity/internal/citylayout"
+	"github.com/gastownhall/gascity/internal/config"
 	"github.com/gastownhall/gascity/internal/fsys"
 	"github.com/gastownhall/gascity/internal/orders"
+	"github.com/gastownhall/gascity/internal/packman"
 )
 
 const (
@@ -26,11 +29,17 @@ const (
 	packHashManifestFile  = ".gc-pack-hashes.json"
 )
 
-// builtinPacks lists all packs embedded in the gc binary. These are
-// materialized to .gc/system/packs/ on every gc start and gc init.
+// builtinPacks lists all packs embedded in the gc binary. Normal config loads
+// read them from the shared bundled repo cache; MaterializeBuiltinPacks remains
+// as a legacy repair helper.
 var builtinPacks = builtinpacks.All()
 
 var builtinPackRefreshCache sync.Map
+
+var (
+	ensureBundledPackInCache       = packman.EnsureRepoInCache
+	builtinPackSyntheticCommitOnce = sync.OnceValues(computeBuiltinPackSyntheticCommit)
+)
 
 type builtinPackRefreshState struct {
 	mu          sync.Mutex
@@ -49,8 +58,8 @@ type builtinPackFile struct {
 	perm os.FileMode
 }
 
-// MaterializeBuiltinPacks writes all embedded pack files to
-// .gc/system/packs/{name}/ in the city directory. Files whose content and mode
+// MaterializeBuiltinPacks writes all embedded pack files to the legacy
+// .gc/system/packs/{name}/ directory in the city. Files whose content and mode
 // already match are left in place; changed content or mode is repaired with an
 // atomic rename so readers never observe a truncated file. Executable scripts
 // get 0755; everything else 0644.
@@ -61,7 +70,7 @@ type builtinPackFile struct {
 // Required packs (core, maintenance, and the provider-dependent bd/dolt) are
 // always refreshed and validated, so a stale or corrupt required pack on disk
 // is repaired rather than silently accepted.
-// Idempotent: safe to call on every gc start and gc init.
+// Idempotent, but no longer used by normal config/start paths.
 func MaterializeBuiltinPacks(cityPath string) error {
 	required := requiredBuiltinPackSet(cityPath)
 	for _, bp := range builtinPacks {
@@ -90,6 +99,9 @@ func builtinPackIncludesForConfigLoad(fs fsys.FS, tomlPath string, warningWriter
 	}
 	cityPath := filepath.Dir(tomlPath)
 	if err := ensureBuiltinPacksReadyForConfigLoad(cityPath, warningWriter); err != nil {
+		return nil, err
+	}
+	if err := ensureBuiltinImportsInstalledForConfigLoad(cityPath); err != nil {
 		return nil, err
 	}
 	return builtinPackIncludes(cityPath), nil
@@ -137,29 +149,178 @@ func ensureBuiltinPacksReadyForConfigLoad(cityPath string, warningWriter io.Writ
 }
 
 func materializeBuiltinPacksForConfigLoad(cityPath string) builtinPackRefreshResult {
-	if err := MaterializeBuiltinPacks(cityPath); err != nil {
+	if err := ensureRequiredBuiltinPacksCached(cityPath); err != nil {
 		if missing := unusableRequiredBuiltinPackNames(cityPath); len(missing) > 0 {
 			return builtinPackRefreshResult{
-				fatal: fmt.Errorf("materializing builtin packs: required builtin packs remain unusable (%s): %w", strings.Join(missing, ", "), err),
+				fatal: fmt.Errorf("caching builtin packs: required builtin packs remain unusable (%s): %w", strings.Join(missing, ", "), err),
 			}
 		}
 		return builtinPackRefreshResult{
-			warning: fmt.Errorf("builtin pack refresh incomplete; using existing materialized packs: %w", err),
+			warning: fmt.Errorf("builtin pack cache refresh incomplete; using existing cached packs: %w", err),
 		}
 	}
 	return builtinPackRefreshResult{ready: true}
 }
 
 func unusableRequiredBuiltinPackNames(cityPath string) []string {
-	systemRoot := filepath.Join(cityPath, citylayout.SystemPacksRoot)
 	var missing []string
 	for _, name := range requiredBuiltinPackNames(cityPath) {
 		bp, ok := builtinPackByName(name)
-		if !ok || !packContainsEmbeddedState(bp.FS, filepath.Join(systemRoot, name)) {
+		packDir, err := bundledBuiltinPackDir(name)
+		if err != nil || !ok || !packContainsEmbeddedState(bp.FS, packDir) {
 			missing = append(missing, name)
 		}
 	}
 	return missing
+}
+
+func ensureRequiredBuiltinPacksCached(cityPath string) error {
+	for _, name := range requiredBuiltinPackNames(cityPath) {
+		if _, err := ensureBuiltinPackCached(name); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func ensureBuiltinPackCached(name string) (string, error) {
+	source, ok := builtinpacks.Source(name)
+	if !ok {
+		return "", fmt.Errorf("unknown builtin pack %q", name)
+	}
+	commit, err := builtinPackSyntheticCommit()
+	if err != nil {
+		return "", err
+	}
+	cacheRoot, err := ensureBundledPackInCache(source, commit)
+	if err != nil {
+		return "", fmt.Errorf("caching builtin pack %q: %w", name, err)
+	}
+	pack, ok := builtinpacks.ByName(name)
+	if !ok {
+		return "", fmt.Errorf("unknown builtin pack %q", name)
+	}
+	return filepath.Join(cacheRoot, filepath.FromSlash(pack.Subpath)), nil
+}
+
+func ensureBuiltinImportsInstalledForConfigLoad(cityPath string) error {
+	allImports, err := collectAllImportsFS(fsys.OSFS{}, cityPath)
+	if err != nil {
+		return err
+	}
+
+	builtinLock := &packman.Lockfile{
+		Schema: packman.LockfileSchema,
+		Packs:  make(map[string]packman.LockedPack),
+	}
+	for _, imp := range allImports {
+		source := strings.TrimSpace(imp.Source)
+		if source == "" || !builtinpacks.IsSource(source) {
+			continue
+		}
+		entry, err := lockedBuiltinPackForImport(source, imp.Version)
+		if err != nil {
+			return err
+		}
+		builtinLock.Packs[source] = entry
+	}
+	if len(builtinLock.Packs) == 0 {
+		return nil
+	}
+
+	for source, pack := range builtinLock.Packs {
+		if _, err := ensureBundledPackInCache(source, pack.Commit); err != nil {
+			return fmt.Errorf("caching builtin import %q: %w", source, err)
+		}
+	}
+
+	lock, err := readImportLockfile(fsys.OSFS{}, cityPath)
+	if err != nil {
+		return err
+	}
+	changed := false
+	if lock.Packs == nil {
+		lock.Packs = make(map[string]packman.LockedPack)
+		changed = true
+	}
+	for source, pack := range builtinLock.Packs {
+		if !sameLockedPack(lock.Packs[source], pack) {
+			lock.Packs[source] = pack
+			changed = true
+		}
+	}
+	if !changed {
+		return nil
+	}
+	return writeImportLockfile(fsys.OSFS{}, cityPath, lock)
+}
+
+func lockedBuiltinPackForImport(source, version string) (packman.LockedPack, error) {
+	version = strings.TrimSpace(version)
+	commit := strings.TrimPrefix(version, "sha:")
+	if !strings.HasPrefix(version, "sha:") {
+		switch strings.TrimSpace(source) {
+		case config.PublicGastownPackSource:
+			version = config.PublicGastownPackVersion
+			commit = strings.TrimPrefix(version, "sha:")
+		default:
+			synthetic, err := builtinPackSyntheticCommit()
+			if err != nil {
+				return packman.LockedPack{}, err
+			}
+			version = "sha:" + synthetic
+			commit = synthetic
+		}
+	}
+	if strings.TrimSpace(commit) == "" {
+		return packman.LockedPack{}, fmt.Errorf("builtin import %s has empty sha version", source)
+	}
+	return packman.LockedPack{
+		Version: version,
+		Commit:  commit,
+		Fetched: time.Now().UTC(),
+	}, nil
+}
+
+func sameLockedPack(a, b packman.LockedPack) bool {
+	return strings.TrimSpace(a.Version) == strings.TrimSpace(b.Version) &&
+		strings.EqualFold(strings.TrimSpace(a.Commit), strings.TrimSpace(b.Commit))
+}
+
+func bundledBuiltinPackDir(name string) (string, error) {
+	source, ok := builtinpacks.Source(name)
+	if !ok {
+		return "", fmt.Errorf("unknown builtin pack %q", name)
+	}
+	commit, err := builtinPackSyntheticCommit()
+	if err != nil {
+		return "", err
+	}
+	cacheRoot, err := packman.RepoCachePath(source, commit)
+	if err != nil {
+		return "", err
+	}
+	pack, ok := builtinpacks.ByName(name)
+	if !ok {
+		return "", fmt.Errorf("unknown builtin pack %q", name)
+	}
+	return filepath.Join(cacheRoot, filepath.FromSlash(pack.Subpath)), nil
+}
+
+func builtinPackSyntheticCommit() (string, error) {
+	return builtinPackSyntheticCommitOnce()
+}
+
+func computeBuiltinPackSyntheticCommit() (string, error) {
+	hash, err := builtinpacks.SyntheticContentHash()
+	if err != nil {
+		return "", fmt.Errorf("hashing bundled builtin packs: %w", err)
+	}
+	commit := strings.TrimPrefix(hash, "sha256:")
+	if strings.TrimSpace(commit) == "" {
+		return "", fmt.Errorf("empty bundled builtin pack hash")
+	}
+	return commit, nil
 }
 
 func builtinPackByName(name string) (builtinpacks.Pack, bool) {
@@ -261,10 +422,10 @@ func emitBuiltinPackRefreshWarning(w io.Writer, err error) {
 	fmt.Fprintf(w, "warning: %v\n", err) //nolint:errcheck // best-effort warning emission
 }
 
-// builtinPackIncludes returns the system pack paths that should be
-// auto-included in config loading. These are appended as extraIncludes
-// to LoadWithIncludes so they go through normal pack expansion
-// (ExpandCityPacks) with dedup/fallback resolution.
+// builtinPackIncludes returns the cached builtin pack paths that should be
+// auto-included in config loading. These are appended as extraIncludes to
+// LoadWithIncludes so they go through normal pack expansion (ExpandCityPacks)
+// with dedup/fallback resolution.
 //
 // Core and maintenance are always included. Core ships the role prompts
 // referenced by implicit agents and the overlay/per-provider hook files,
@@ -274,17 +435,30 @@ func emitBuiltinPackRefreshWarning(w io.Writer, err error) {
 // and let its own pack includes pull in dolt transitively. Gastown is
 // never auto-included — it requires an explicit workspace.includes entry.
 func builtinPackIncludes(cityPath string) []string {
-	systemRoot := filepath.Join(cityPath, citylayout.SystemPacksRoot)
-
 	var includes []string
 	for _, name := range requiredBuiltinPackNames(cityPath) {
-		packPath := filepath.Join(systemRoot, name)
+		packPath, err := bundledBuiltinPackDir(name)
+		if err != nil {
+			return includes
+		}
 		if packExists(packPath) {
 			includes = append(includes, packPath)
 		}
 	}
 
 	return includes
+}
+
+func builtinPackDirFromPackDirs(packDirs []string, name string) string {
+	for _, dir := range packDirs {
+		if filepath.Base(filepath.Clean(dir)) != name {
+			continue
+		}
+		if packExists(dir) {
+			return dir
+		}
+	}
+	return ""
 }
 
 // packExists checks if a pack.toml exists in the given directory.
