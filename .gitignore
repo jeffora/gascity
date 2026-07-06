@@ -29,6 +29,9 @@ cmd/gc/.runtime/
 !/.claude/
 /.claude/*
 !/.claude/skills/
+# Gas City materializes per-session core.* skills as symlinks into
+# .claude/skills/ at runtime; they are not source and must not dirty the tree.
+/.claude/skills/core.*
 
 # sync-project-agents writes local migration backups here; don't commit them.
 .agents/migration/
