@@ -16,9 +16,9 @@ import (
 	"github.com/gastownhall/gascity/internal/execenv"
 )
 
-// labelOrderTracking is applied to order bookkeeping beads by the dispatcher.
-// Event orders must not self-fire on lifecycle events emitted by these beads.
-const labelOrderTracking = "order-tracking"
+// labelOrderTracking ("order-tracking") is declared in the canonical
+// order-class label block in store.go. It marks order bookkeeping beads so
+// event orders do not self-fire on lifecycle events emitted by these beads.
 
 // TriggerResult holds the outcome of a trigger check.
 type TriggerResult struct {
