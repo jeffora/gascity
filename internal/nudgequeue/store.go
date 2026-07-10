@@ -3,6 +3,7 @@ package nudgequeue
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -34,6 +35,22 @@ const nudgeBeadLabel = "gc:nudge"
 
 // nudgeBeadType is the bead type used for queued-nudge shadow beads.
 const nudgeBeadType = "chore"
+
+// StaleCandidatesBefore lists queued-nudge shadow beads created before `before`,
+// oldest first — the candidate set for the stale-nudge retention sweep. It
+// returns raw beads (the caller terminalizes/closes them via the store); the
+// nudge-bead query shape (the gc:nudge label + wisp tier) stays confined to this
+// package, so callers above it never construct a nudge-bead query directly.
+// limit == 0 means unbounded.
+func StaleCandidatesBefore(store beads.NudgesStore, before time.Time, limit int) ([]beads.Bead, error) {
+	return store.List(beads.ListQuery{
+		Label:         nudgeBeadLabel,
+		CreatedBefore: before,
+		Limit:         limit,
+		Sort:          beads.SortCreatedAsc,
+		TierMode:      beads.TierBoth,
+	})
+}
 
 // NudgeShadow is the partial, read-only view decoded from a nudge shadow bead.
 // It carries ONLY the fields the bead is authoritative for: the controller-
@@ -262,6 +279,42 @@ func (s *Store) RollbackEnqueue(beadID string) error {
 		errs = errors.Join(errs, err)
 	}
 	return errs
+}
+
+// SweepStale stamps the gc-swept terminal vocabulary on a stale nudge shadow bead
+// past the gc retention window and closes it. It is the retention-sweep sibling of
+// Terminalize/RollbackEnqueue: the gc-swept terminal-key vocabulary (state /
+// terminal_reason / commit_boundary / terminal_at / close_reason) is now confined
+// here alongside Terminalize's canonicalCloseReason vocabulary, so the cmd/gc
+// sweep no longer re-stamps these keys inline. closeReason is caller-supplied —
+// cmd/gc keeps ownership of the human message constant — and must satisfy the
+// >=20-char validation.on-close floor.
+//
+// SweepStale emits byte-identical bead writes to the prior inline stamp+close
+// block in cmd/gc/nudge_mail_sweep.go: a single SetMetadataBatch with the same
+// five keys, then Close. A SetMetadataBatch failure returns without closing,
+// matching the sweep's continue-without-close semantics, and both error strings
+// preserve the caller's prior "nudge %s: set metadata/close: %w" text so
+// joined-error assertions keep passing. Unlike Terminalize it adds no missing-bead
+// tolerance, matching the inline sweep it replaces.
+func (s *Store) SweepStale(beadID, closeReason string, now time.Time) error {
+	if s == nil || s.store.Store == nil {
+		return nil
+	}
+	update := map[string]string{
+		"state":           "gc-swept",
+		"terminal_reason": "gc-swept-stale",
+		"commit_boundary": "gc-swept",
+		"terminal_at":     now.UTC().Format(time.RFC3339),
+		"close_reason":    closeReason,
+	}
+	if err := s.store.SetMetadataBatch(beadID, update); err != nil {
+		return fmt.Errorf("nudge %s: set metadata: %w", beadID, err)
+	}
+	if err := s.store.Close(beadID); err != nil {
+		return fmt.Errorf("nudge %s: close: %w", beadID, err)
+	}
+	return nil
 }
 
 // Find returns the OPEN (or terminal-but-decodable) nudge shadow for nudgeID as

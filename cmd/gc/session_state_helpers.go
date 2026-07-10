@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/gastownhall/gascity/internal/beads"
+	sessionpkg "github.com/gastownhall/gascity/internal/session"
 )
 
 func isDrainedSessionMetadata(meta map[string]string) bool {
@@ -11,11 +12,22 @@ func isDrainedSessionMetadata(meta map[string]string) bool {
 	if state == "drained" {
 		return true
 	}
-	return state == "asleep" && strings.TrimSpace(meta["sleep_reason"]) == "drained"
+	return state == "asleep" && strings.TrimSpace(meta["sleep_reason"]) == string(sessionpkg.SleepReasonDrained)
 }
 
 func isDrainedSessionBead(session beads.Bead) bool {
 	return isDrainedSessionMetadata(session.Metadata)
+}
+
+// isDrainedSessionInfo is the session.Info mirror of isDrainedSessionBead. It
+// reads the RAW metadata state (Info.MetadataState) and sleep reason
+// (Info.SleepReason), matching the bead form's untrimmed-key reads.
+func isDrainedSessionInfo(i sessionpkg.Info) bool {
+	state := strings.TrimSpace(i.MetadataState)
+	if state == "drained" {
+		return true
+	}
+	return state == "asleep" && strings.TrimSpace(i.SleepReason) == string(sessionpkg.SleepReasonDrained)
 }
 
 // poolSessionIsLive reports whether a pool session bead represents an
@@ -63,8 +75,27 @@ func isPoolSessionSlotFreeable(session beads.Bead) bool {
 	}
 	reason := strings.TrimSpace(session.Metadata["sleep_reason"])
 	switch reason {
-	case "idle", "idle-timeout", sleepReasonCityStop, "failed-create", sleepReasonRuntimeMissing,
-		sleepReasonProviderTerminalError:
+	case string(sessionpkg.SleepReasonIdle), string(sessionpkg.SleepReasonIdleTimeout),
+		string(sessionpkg.SleepReasonCityStop), string(sessionpkg.SleepReasonFailedCreate),
+		string(sessionpkg.SleepReasonRuntimeMissing), string(sessionpkg.SleepReasonProviderTerminalError):
+		return true
+	}
+	return false
+}
+
+// isPoolSessionSlotFreeableInfo is the session.Info mirror of isPoolSessionSlotFreeable.
+func isPoolSessionSlotFreeableInfo(i sessionpkg.Info) bool {
+	if isDrainedSessionInfo(i) {
+		return true
+	}
+	if strings.TrimSpace(i.MetadataState) != "asleep" {
+		return false
+	}
+	reason := strings.TrimSpace(i.SleepReason)
+	switch reason {
+	case string(sessionpkg.SleepReasonIdle), string(sessionpkg.SleepReasonIdleTimeout),
+		string(sessionpkg.SleepReasonCityStop), string(sessionpkg.SleepReasonFailedCreate),
+		string(sessionpkg.SleepReasonRuntimeMissing), string(sessionpkg.SleepReasonProviderTerminalError):
 		return true
 	}
 	return false

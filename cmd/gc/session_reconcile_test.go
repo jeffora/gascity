@@ -1111,7 +1111,7 @@ func TestCheckStability_AliveReturnsFalse(t *testing.T) {
 		"last_woke_at": clk.Now().Add(-10 * time.Second).Format(time.RFC3339),
 	})
 
-	if checkStability(&session, nil, true, dt, sessionFrontDoor(store), clk, nil) {
+	if stab, _ := checkStability(&session, nil, true, dt, sessionFrontDoor(store), clk, nil); stab {
 		t.Error("alive session should not report stability failure")
 	}
 }
@@ -1127,7 +1127,7 @@ func TestCheckStability_RapidExit(t *testing.T) {
 		"wake_attempts": "0",
 	})
 
-	if !checkStability(&session, nil, false, dt, sessionFrontDoor(store), clk, nil) {
+	if stab, _ := checkStability(&session, nil, false, dt, sessionFrontDoor(store), clk, nil); !stab {
 		t.Error("rapid exit should report stability failure")
 	}
 
@@ -1153,7 +1153,7 @@ func TestCheckStability_PendingCreateInFlightNotCounted(t *testing.T) {
 		"wake_attempts":        "0",
 	})
 
-	if checkStability(&session, nil, false, dt, sessionFrontDoor(store), clk, nil) {
+	if stab, _ := checkStability(&session, nil, false, dt, sessionFrontDoor(store), clk, nil); stab {
 		t.Fatal("in-flight pending create should not be counted as a rapid exit")
 	}
 	if got := session.Metadata["wake_attempts"]; got != "0" {
@@ -1175,7 +1175,7 @@ func TestCheckStability_PendingCreateClaimNotCountedAfterStartupLeaseExpires(t *
 		"wake_attempts":        "0",
 	})
 
-	if checkStability(&session, nil, false, dt, sessionFrontDoor(store), clk, nil) {
+	if stab, _ := checkStability(&session, nil, false, dt, sessionFrontDoor(store), clk, nil); stab {
 		t.Fatal("pending_create_claim should suppress stability counting until create recovery clears the claim")
 	}
 	if got := session.Metadata["wake_attempts"]; got != "0" {
@@ -1194,7 +1194,7 @@ func TestCheckStability_DrainingNotCounted(t *testing.T) {
 		"last_woke_at": now.Add(-10 * time.Second).Format(time.RFC3339),
 	})
 
-	if checkStability(&session, nil, false, dt, sessionFrontDoor(store), clk, nil) {
+	if stab, _ := checkStability(&session, nil, false, dt, sessionFrontDoor(store), clk, nil); stab {
 		t.Error("draining session death should not count as stability failure")
 	}
 }
@@ -1210,7 +1210,7 @@ func TestCheckStability_StableSession(t *testing.T) {
 		"last_woke_at": now.Add(-2 * time.Minute).Format(time.RFC3339),
 	})
 
-	if checkStability(&session, nil, false, dt, sessionFrontDoor(store), clk, nil) {
+	if stab, _ := checkStability(&session, nil, false, dt, sessionFrontDoor(store), clk, nil); stab {
 		t.Error("session that lived past threshold should not be stability failure")
 	}
 }
@@ -1229,7 +1229,7 @@ func TestCheckStability_SubprocessProviderSkipsCrashCounting(t *testing.T) {
 		"wake_attempts": "0",
 	})
 
-	if checkStability(&session, cfg, false, dt, sessionFrontDoor(store), clk, nil) {
+	if stab, _ := checkStability(&session, cfg, false, dt, sessionFrontDoor(store), clk, nil); stab {
 		t.Fatal("subprocess rapid exit should not be counted as a crash")
 	}
 	if got := session.Metadata["wake_attempts"]; got != "0" {
@@ -1462,79 +1462,6 @@ func TestSessionIsQuarantined(t *testing.T) {
 	}
 }
 
-func TestCapWakeConfigByDemand(t *testing.T) {
-	cfg := &config.City{
-		Agents: []config.Agent{
-			{Name: "worker", MinActiveSessions: intPtr(0), MaxActiveSessions: intPtr(10)},
-		},
-	}
-	poolDesired := map[string]int{"worker": 2}
-
-	// 5 asleep sessions, all get WakeConfig from evaluateWakeReasons.
-	// But desired is 2, so only 2 should keep WakeConfig.
-	sessions := make([]beads.Bead, 5)
-	for i := range sessions {
-		sessions[i] = makeBead(fmt.Sprintf("s%d", i), map[string]string{
-			"template":     "worker",
-			"session_name": fmt.Sprintf("worker-%d", i),
-			"state":        "asleep",
-		})
-	}
-
-	evals := computeWakeEvaluations(sessions, cfg, nil, poolDesired, nil, nil, &clock.Fake{Time: time.Now()})
-
-	wakeCount := 0
-	for _, eval := range evals {
-		if containsWakeReason(eval.Reasons, WakeConfig) {
-			wakeCount++
-		}
-	}
-	if wakeCount != 2 {
-		t.Errorf("WakeConfig count = %d, want 2 (poolDesired)", wakeCount)
-	}
-}
-
-func TestCapWakeConfigByDemand_ActiveCountsAgainstBudget(t *testing.T) {
-	cfg := &config.City{
-		Agents: []config.Agent{
-			{Name: "worker", MinActiveSessions: intPtr(0), MaxActiveSessions: intPtr(10)},
-		},
-	}
-	poolDesired := map[string]int{"worker": 3}
-
-	// 1 active (creating), 4 asleep. Desired is 3.
-	// Active counts against budget: 3 - 1 = 2 asleep should wake.
-	sessions := []beads.Bead{
-		makeBead("s0", map[string]string{
-			"template": "worker", "session_name": "worker-0", "state": "creating",
-		}),
-		makeBead("s1", map[string]string{
-			"template": "worker", "session_name": "worker-1", "state": "asleep",
-		}),
-		makeBead("s2", map[string]string{
-			"template": "worker", "session_name": "worker-2", "state": "asleep",
-		}),
-		makeBead("s3", map[string]string{
-			"template": "worker", "session_name": "worker-3", "state": "asleep",
-		}),
-		makeBead("s4", map[string]string{
-			"template": "worker", "session_name": "worker-4", "state": "asleep",
-		}),
-	}
-
-	evals := computeWakeEvaluations(sessions, cfg, nil, poolDesired, nil, nil, &clock.Fake{Time: time.Now()})
-
-	asleepWakes := 0
-	for _, s := range sessions {
-		if s.Metadata["state"] == "asleep" && containsWakeReason(evals[s.ID].Reasons, WakeConfig) {
-			asleepWakes++
-		}
-	}
-	if asleepWakes != 2 {
-		t.Errorf("asleep sessions with WakeConfig = %d, want 2 (desired 3 minus 1 active)", asleepWakes)
-	}
-}
-
 func TestIsPoolExcess(t *testing.T) {
 	cfg := &config.City{
 		Agents: []config.Agent{
@@ -1752,8 +1679,8 @@ func TestHealState_StaleCreatingPendingClaimDoesNotOscillateBackToCreating(t *te
 	if got := session.Metadata["state"]; got != "asleep" {
 		t.Fatalf("after first heal: state = %q, want asleep", got)
 	}
-	if got := session.Metadata["sleep_reason"]; got != sleepReasonRuntimeMissing {
-		t.Fatalf("after first heal: sleep_reason = %q, want %q", got, sleepReasonRuntimeMissing)
+	if got := session.Metadata["sleep_reason"]; got != string(sessionpkg.SleepReasonRuntimeMissing) {
+		t.Fatalf("after first heal: sleep_reason = %q, want %q", got, string(sessionpkg.SleepReasonRuntimeMissing))
 	}
 	if got := session.Metadata["pending_create_claim"]; got != "" {
 		t.Fatalf("after first heal: pending_create_claim = %q, want empty", got)
@@ -1894,10 +1821,15 @@ func TestHealStatePatchProjectsRuntimeLiveness(t *testing.T) {
 			}(),
 			want: map[string]string{
 				"state":                      "asleep",
-				"sleep_reason":               sleepReasonRuntimeMissing,
+				"sleep_reason":               string(sessionpkg.SleepReasonRuntimeMissing),
 				"session_key":                "",
 				"started_config_hash":        "",
 				"continuation_reset_pending": "true",
+				// Priming markers share started_config_hash's lifetime (S19
+				// Stage 2 C-6): the continuation reset clears them too.
+				sessionpkg.PrimedAtMetadataKey:           "",
+				sessionpkg.PrimingAttemptedAtMetadataKey: "",
+				sessionpkg.PromptHashMetadataKey:         "",
 			},
 		},
 		{
@@ -1973,12 +1905,17 @@ func TestHealStatePatchProjectsRuntimeLiveness(t *testing.T) {
 			}(),
 			want: map[string]string{
 				"state":                      "asleep",
-				"sleep_reason":               sleepReasonRuntimeMissing,
+				"sleep_reason":               string(sessionpkg.SleepReasonRuntimeMissing),
 				"session_key":                "",
 				"started_config_hash":        "",
 				"continuation_reset_pending": "true",
 				"pending_create_claim":       "",
 				"pending_create_started_at":  "",
+				// Priming markers share started_config_hash's lifetime (S19
+				// Stage 2 C-6): the continuation reset clears them too.
+				sessionpkg.PrimedAtMetadataKey:           "",
+				sessionpkg.PrimingAttemptedAtMetadataKey: "",
+				sessionpkg.PromptHashMetadataKey:         "",
 			},
 		},
 	}
@@ -2165,7 +2102,7 @@ func TestHealState_ClearsStaleResumeMetadata(t *testing.T) {
 		{
 			name:                   "city stop — resume metadata preserved",
 			prevState:              "active",
-			sleepReason:            sleepReasonCityStop,
+			sleepReason:            string(sessionpkg.SleepReasonCityStop),
 			sessionKey:             "abc-123",
 			startedConfigHash:      "hash-before",
 			wantKeyCleared:         false,
@@ -2270,7 +2207,7 @@ func TestCheckStability_RapidExitAfterHealStateKeepsStartedConfigHashCleared(t *
 	if session.Metadata["started_config_hash"] != "" {
 		t.Fatalf("healState started_config_hash = %q, want empty", session.Metadata["started_config_hash"])
 	}
-	if !checkStability(&session, nil, false, nil, sessionFrontDoor(store), clk, nil) {
+	if stab, _ := checkStability(&session, nil, false, nil, sessionFrontDoor(store), clk, nil); !stab {
 		t.Fatal("checkStability should record the rapid exit")
 	}
 	if session.Metadata["started_config_hash"] != "" {
@@ -2550,7 +2487,7 @@ func TestCheckChurn_AliveReturnsFalse(t *testing.T) {
 		"last_woke_at": now.Add(-90 * time.Second).Format(time.RFC3339),
 	})
 
-	if checkChurn(&session, nil, true, dt, sessionFrontDoor(store), clk) {
+	if churn, _ := checkChurn(&session, nil, true, dt, sessionFrontDoor(store), clk); churn {
 		t.Error("alive session should not trigger churn")
 	}
 }
@@ -2568,7 +2505,7 @@ func TestCheckChurn_NonProductiveDeath(t *testing.T) {
 		"churn_count":  "0",
 	})
 
-	if !checkChurn(&session, nil, false, dt, sessionFrontDoor(store), clk) {
+	if churn, _ := checkChurn(&session, nil, false, dt, sessionFrontDoor(store), clk); !churn {
 		t.Error("non-productive death should trigger churn")
 	}
 	if session.Metadata["churn_count"] != "1" {
@@ -2591,7 +2528,7 @@ func TestCheckChurn_RapidExitIgnored(t *testing.T) {
 		"last_woke_at": now.Add(-10 * time.Second).Format(time.RFC3339),
 	})
 
-	if checkChurn(&session, nil, false, dt, sessionFrontDoor(store), clk) {
+	if churn, _ := checkChurn(&session, nil, false, dt, sessionFrontDoor(store), clk); churn {
 		t.Error("rapid exit should not trigger churn (handled by checkStability)")
 	}
 }
@@ -2607,7 +2544,7 @@ func TestCheckChurn_PendingCreateClaimNotCountedAfterStartupLeaseExpires(t *test
 		"churn_count":          "0",
 	})
 
-	if checkChurn(&session, nil, false, dt, sessionFrontDoor(store), clk) {
+	if churn, _ := checkChurn(&session, nil, false, dt, sessionFrontDoor(store), clk); churn {
 		t.Fatal("pending_create_claim should suppress churn counting until create recovery clears the claim")
 	}
 	if got := session.Metadata["churn_count"]; got != "0" {
@@ -2626,7 +2563,7 @@ func TestCheckChurn_ProductiveSessionIgnored(t *testing.T) {
 		"last_woke_at": now.Add(-10 * time.Minute).Format(time.RFC3339),
 	})
 
-	if checkChurn(&session, nil, false, dt, sessionFrontDoor(store), clk) {
+	if churn, _ := checkChurn(&session, nil, false, dt, sessionFrontDoor(store), clk); churn {
 		t.Error("productive session death should not trigger churn")
 	}
 }
@@ -2645,7 +2582,7 @@ func TestCheckChurn_DeadProductiveSessionClearsChurnCount(t *testing.T) {
 		"churn_count":  "2",
 	})
 
-	if checkChurn(&session, nil, false, dt, sessionFrontDoor(store), clk) {
+	if churn, _ := checkChurn(&session, nil, false, dt, sessionFrontDoor(store), clk); churn {
 		t.Error("dead productive session should not trigger churn")
 	}
 	if session.Metadata["churn_count"] != "0" {
@@ -2667,7 +2604,7 @@ func TestCheckChurn_ClearedLastWokeAtSkipsChurn(t *testing.T) {
 		"churn_count":  "2",
 	})
 
-	if checkChurn(&session, nil, false, dt, sessionFrontDoor(store), clk) {
+	if churn, _ := checkChurn(&session, nil, false, dt, sessionFrontDoor(store), clk); churn {
 		t.Error("session with cleared last_woke_at should not trigger churn")
 	}
 	if session.Metadata["churn_count"] != "2" {
@@ -2686,7 +2623,7 @@ func TestCheckChurn_DrainingNotCounted(t *testing.T) {
 		"last_woke_at": now.Add(-90 * time.Second).Format(time.RFC3339),
 	})
 
-	if checkChurn(&session, nil, false, dt, sessionFrontDoor(store), clk) {
+	if churn, _ := checkChurn(&session, nil, false, dt, sessionFrontDoor(store), clk); churn {
 		t.Error("draining session death should not count as churn")
 	}
 }
@@ -2704,7 +2641,7 @@ func TestCheckChurn_SubprocessProviderSkipped(t *testing.T) {
 		"last_woke_at": now.Add(-90 * time.Second).Format(time.RFC3339),
 	})
 
-	if checkChurn(&session, cfg, false, dt, sessionFrontDoor(store), clk) {
+	if churn, _ := checkChurn(&session, cfg, false, dt, sessionFrontDoor(store), clk); churn {
 		t.Error("subprocess sessions should not trigger churn")
 	}
 }
@@ -2717,13 +2654,13 @@ func TestCheckChurn_CityStopSleepReasonSkipped(t *testing.T) {
 
 	session := makeBead("b1", map[string]string{
 		"last_woke_at":               now.Add(-90 * time.Second).Format(time.RFC3339),
-		"sleep_reason":               sleepReasonCityStop,
+		"sleep_reason":               string(sessionpkg.SleepReasonCityStop),
 		"churn_count":                "0",
 		"session_key":                "resume-key",
 		"continuation_reset_pending": "",
 	})
 
-	if checkChurn(&session, &config.City{}, false, dt, sessionFrontDoor(store), clk) {
+	if churn, _ := checkChurn(&session, &config.City{}, false, dt, sessionFrontDoor(store), clk); churn {
 		t.Fatal("city-stop sessions should not trigger churn")
 	}
 	if got := session.Metadata["session_key"]; got != "resume-key" {

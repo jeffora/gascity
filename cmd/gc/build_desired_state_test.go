@@ -6354,7 +6354,7 @@ func TestBuildDesiredState_RigOnDemandNamedSessionAssigneeWithRouteMaterializesN
 			if err != nil {
 				t.Fatalf("loadSessionBeads: %v", err)
 			}
-			poolDesired := PoolDesiredCounts(ComputePoolDesiredStates(cfg, dsResult.AssignedWorkBeads, sessions, dsResult.ScaleCheckCounts))
+			poolDesired := PoolDesiredCounts(ComputePoolDesiredStates(cfg, dsResult.AssignedWorkBeads, sessionInfosFromBeads(sessions), dsResult.ScaleCheckCounts))
 			if poolDesired == nil {
 				poolDesired = map[string]int{}
 			}
@@ -7793,7 +7793,7 @@ func TestBuildDesiredState_ScaleCheckErrorPreservesDormantAffectedPoolSessionWit
 
 	poolDesired := retainScaleCheckPartialPoolDesired(
 		cfg,
-		PoolDesiredCounts(ComputePoolDesiredStates(cfg, nil, snapshot.Open(), result.ScaleCheckCounts)),
+		PoolDesiredCounts(ComputePoolDesiredStates(cfg, nil, snapshot.OpenInfos(), result.ScaleCheckCounts)),
 		snapshot,
 		result.PoolScaleCheckPartialTemplates,
 	)
@@ -11082,7 +11082,7 @@ func TestBuildDesiredState_ScaleCheckPartialPoolBlocksNewCreates(t *testing.T) {
 		snapshot := newSessionBeadSnapshot([]beads.Bead{activeSession})
 		poolDesired := retainScaleCheckPartialPoolDesired(
 			cfg,
-			PoolDesiredCounts(ComputePoolDesiredStates(cfg, nil, snapshot.Open(), result.ScaleCheckCounts)),
+			PoolDesiredCounts(ComputePoolDesiredStates(cfg, nil, snapshot.OpenInfos(), result.ScaleCheckCounts)),
 			snapshot,
 			result.PoolScaleCheckPartialTemplates,
 		)
@@ -11123,7 +11123,7 @@ func TestBuildDesiredState_ScaleCheckPartialPoolBlocksNewCreates(t *testing.T) {
 		snapshot := newSessionBeadSnapshot([]beads.Bead{awakeSession})
 		poolDesired := retainScaleCheckPartialPoolDesired(
 			cfg,
-			PoolDesiredCounts(ComputePoolDesiredStates(cfg, nil, snapshot.Open(), result.ScaleCheckCounts)),
+			PoolDesiredCounts(ComputePoolDesiredStates(cfg, nil, snapshot.OpenInfos(), result.ScaleCheckCounts)),
 			snapshot,
 			result.PoolScaleCheckPartialTemplates,
 		)
@@ -11155,7 +11155,7 @@ func TestBuildDesiredState_ScaleCheckPartialPoolBlocksNewCreates(t *testing.T) {
 		snapshot := newSessionBeadSnapshot([]beads.Bead{})
 		poolDesired := retainScaleCheckPartialPoolDesired(
 			cfg,
-			PoolDesiredCounts(ComputePoolDesiredStates(cfg, nil, snapshot.Open(), result.ScaleCheckCounts)),
+			PoolDesiredCounts(ComputePoolDesiredStates(cfg, nil, snapshot.OpenInfos(), result.ScaleCheckCounts)),
 			snapshot,
 			result.PoolScaleCheckPartialTemplates,
 		)
@@ -11192,7 +11192,7 @@ func TestBuildDesiredState_ScaleCheckPartialPoolBlocksNewCreates(t *testing.T) {
 		snapshot := newSessionBeadSnapshot([]beads.Bead{activeSession, creatingSession})
 		poolDesired := retainScaleCheckPartialPoolDesired(
 			cfg,
-			PoolDesiredCounts(ComputePoolDesiredStates(cfg, nil, snapshot.Open(), result.ScaleCheckCounts)),
+			PoolDesiredCounts(ComputePoolDesiredStates(cfg, nil, snapshot.OpenInfos(), result.ScaleCheckCounts)),
 			snapshot,
 			result.PoolScaleCheckPartialTemplates,
 		)
@@ -11229,7 +11229,7 @@ func TestBuildDesiredState_ScaleCheckPartialPoolBlocksNewCreates(t *testing.T) {
 
 	// Criterion #6 (ga-4qbgqf.3): fresh in-flight creates (pending_create_claim=true)
 	// are retained in desired state and in the retained count during a partial tick.
-	// poolPartialAlive is true via isPendingPoolCreate, so the narrow guard keeps them.
+	// poolPartialAlive is true via isPendingPoolCreateInfo, so the narrow guard keeps them.
 	t.Run("fresh pending_create_claim creating bead retained during partial tick", func(t *testing.T) {
 		partialStore := &controllerDemandPartialStore{MemStore: beads.NewMemStore()}
 		freshCreate := beads.Bead{
@@ -11264,7 +11264,7 @@ func TestBuildDesiredState_ScaleCheckPartialPoolBlocksNewCreates(t *testing.T) {
 		}
 		poolDesired := retainScaleCheckPartialPoolDesired(
 			cfg,
-			PoolDesiredCounts(ComputePoolDesiredStates(cfg, nil, snapshot.Open(), partialResult.ScaleCheckCounts)),
+			PoolDesiredCounts(ComputePoolDesiredStates(cfg, nil, snapshot.OpenInfos(), partialResult.ScaleCheckCounts)),
 			snapshot,
 			partialResult.PoolScaleCheckPartialTemplates,
 		)
