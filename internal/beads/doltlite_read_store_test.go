@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -1829,4 +1830,59 @@ func openTestDoltliteWriter(t *testing.T, readDB *sql.DB) *sql.DB {
 		t.Fatalf("open writable doltlite db: %v", err)
 	}
 	return writer
+}
+
+// TestDoltliteReadStoreConditionalWriterLoudlyDegrades pins the F2 fix
+// (ga-zj78gu): once BdStore implements ConditionalWriter, the methods promote
+// through DoltliteReadStore's embedded *BdStore and ConditionalWriterFor asserts
+// true — but DoltliteReadStore.Get reads via direct SQL and cannot supply a real
+// revision until bd #4682. So the four CAS methods are shadowed to return the
+// typed unsupported veto rather than false-promote a store whose read path and
+// fenced-write path disagree on the revision source. The interface stays
+// SATISFIED (no hiding wrapper); every verb just degrades loudly.
+func TestDoltliteReadStoreConditionalWriterLoudlyDegrades(t *testing.T) {
+	store := newDoltliteStoreWithIssues(t, []testDoltliteIssue{
+		{ID: "ga-1", Title: "target", Status: "open", IssueType: "task"},
+	})
+
+	w, ok := ConditionalWriterFor(store)
+	if !ok {
+		t.Fatal("DoltliteReadStore must still SATISFY ConditionalWriter (degrade is behavioral, not interface-stripping)")
+	}
+
+	if err := w.UpdateIfMatch("ga-1", 1, UpdateOpts{}); !IsConditionalWriteUnsupported(err) {
+		t.Fatalf("UpdateIfMatch: got %v, want ErrConditionalWriteUnsupported", err)
+	}
+	if err := w.CloseIfMatch("ga-1", 1); !IsConditionalWriteUnsupported(err) {
+		t.Fatalf("CloseIfMatch: got %v, want ErrConditionalWriteUnsupported", err)
+	}
+	if err := w.DeleteIfMatch("ga-1", 1); !IsConditionalWriteUnsupported(err) {
+		t.Fatalf("DeleteIfMatch: got %v, want ErrConditionalWriteUnsupported", err)
+	}
+	ok2, err := w.CompareAndSetMetadataKey("ga-1", "k", "", "v")
+	if ok2 || !IsConditionalWriteUnsupported(err) {
+		t.Fatalf("CompareAndSetMetadataKey: got (%v, %v), want (false, ErrConditionalWriteUnsupported)", ok2, err)
+	}
+
+	// Completeness guard: iterate EVERY method on the ConditionalWriter interface
+	// via reflection and assert each degrades to unsupported. A CAS verb added to
+	// the interface later that is not shadowed here would instead promote from the
+	// embedded *BdStore, run the capability probe against the fatal-on-call
+	// backing runner, and fail loudly — closing the F2 false-promote class for
+	// future verbs, not just today's four.
+	cwType := reflect.TypeOf((*ConditionalWriter)(nil)).Elem()
+	wv := reflect.ValueOf(w)
+	for i := 0; i < cwType.NumMethod(); i++ {
+		name := cwType.Method(i).Name
+		method := wv.MethodByName(name)
+		in := make([]reflect.Value, method.Type().NumIn())
+		for j := range in {
+			in[j] = reflect.Zero(method.Type().In(j))
+		}
+		out := method.Call(in)
+		last, _ := out[len(out)-1].Interface().(error)
+		if !IsConditionalWriteUnsupported(last) {
+			t.Fatalf("ConditionalWriter.%s degraded to %v, want ErrConditionalWriteUnsupported (unshadowed promoted verb?)", name, last)
+		}
+	}
 }

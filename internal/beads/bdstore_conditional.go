@@ -3,15 +3,25 @@ package beads
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"math/rand"
+	"strconv"
 	"strings"
+	"time"
 )
 
 // This file holds BdStore's ConditionalWriter machinery that has no exit-code to
 // key on: bd surfaces every failure as exit 1 with a JSON error envelope, so both
 // the capability probe and the result classifier are message/body based, mirroring
 // the existing isBdTransientWriteError / isBdNotFound / isBdAmbiguousWriteError
-// classifiers. The *IfMatch verbs and the metadata-CAS emulation that consume this
-// machinery land in a later phase.
+// classifiers. The *IfMatch verbs and the metadata-CAS emulation consume that
+// machinery through the runConditionalWrite retry wrapper below.
+
+// BdStore satisfies the optional ConditionalWriter capability. The assertion is
+// what activates promotion through DoltliteReadStore (which embeds *BdStore), so
+// the F2 loud-degrade methods on *DoltliteReadStore land in the same change — see
+// doltlite_read_store.go.
+var _ ConditionalWriter = (*BdStore)(nil)
 
 // conditionalWriteProbeVerbs are the bd subcommands whose --help output must all
 // advertise --if-revision for the store to be treated as CAS-capable. All four
@@ -309,4 +319,221 @@ func conditionalRawDetail(out []byte, err error) string {
 		return err.Error()
 	}
 	return ""
+}
+
+// Retry/emulation tuning for the fenced-write path.
+const (
+	// conditionalWriteMaxAttempts bounds the serialization-class retry inside
+	// runConditionalWrite (mirrors bdTransientWriteAttempts). Ambiguous and
+	// precondition results are never retried here, so this only caps
+	// definitely-rolled-back serialization conflicts.
+	conditionalWriteMaxAttempts = 3
+	// casEmulationMaxAttempts bounds the metadata-CAS emulation loop's
+	// precondition retries under cross-key revision interference (DESIGN §8.4).
+	casEmulationMaxAttempts = 4
+	// casEmulationBaseBackoff is the first backoff step; it doubles per attempt
+	// and is jittered (DESIGN §8.4). Shared by the serialization retry.
+	casEmulationBaseBackoff = 25 * time.Millisecond
+)
+
+// conditionalWriteSleep is the backoff seam for both the serialization retry in
+// runConditionalWrite and the metadata-CAS emulation loop. Tests override it to a
+// no-op so contention/exhaustion cases don't actually sleep 25→200ms per racer.
+// It is a package-level var, so a test that reassigns it must not run in parallel
+// with the fenced-write path and must restore it via t.Cleanup.
+var conditionalWriteSleep = func(d time.Duration) { time.Sleep(d) }
+
+// conditionalWriteBackoff returns the jittered backoff for the attempt-th retry:
+// casEmulationBaseBackoff doubled per attempt, then equal-jittered to spread
+// concurrent racers. math/rand is fine in production (banned only in Workflow
+// scripts); its global source is safe for concurrent use.
+func conditionalWriteBackoff(attempt int) time.Duration {
+	base := casEmulationBaseBackoff << (attempt - 1)
+	return base/2 + time.Duration(rand.Int63n(int64(base)/2+1))
+}
+
+// UpdateIfMatch applies opts to id only if the bead's revision still equals
+// expectedRevision, via bd update --if-revision. An empty opts is the same no-op
+// Update performs (bd rejects an empty update) and returns nil without a fenced
+// write. If this store cannot fence, it returns ErrConditionalWriteUnsupported
+// rather than falling through to an unconditional write.
+func (s *BdStore) UpdateIfMatch(id string, expectedRevision int64, opts UpdateOpts) error {
+	if capable, _ := s.conditionalWritesCapable(); !capable {
+		return ErrConditionalWriteUnsupported
+	}
+	args := bdUpdateArgs(id, opts)
+	if len(args) == 3 {
+		return nil
+	}
+	args = append(args, conditionalWriteFlag, strconv.FormatInt(expectedRevision, 10))
+	return s.runConditionalWrite(id, expectedRevision, args...)
+}
+
+// CloseIfMatch closes id only if its revision still equals expectedRevision. It
+// deliberately does NOT port the unconditional close's import-revert re-read
+// honesty guard: for a fenced write a precondition or gate result must surface,
+// not be masked by a status re-read.
+func (s *BdStore) CloseIfMatch(id string, expectedRevision int64) error {
+	if capable, _ := s.conditionalWritesCapable(); !capable {
+		return ErrConditionalWriteUnsupported
+	}
+	args := append(bdCloseArgs("", id), conditionalWriteFlag, strconv.FormatInt(expectedRevision, 10))
+	return s.runConditionalWrite(id, expectedRevision, args...)
+}
+
+// DeleteIfMatch deletes id only if its revision still equals expectedRevision.
+func (s *BdStore) DeleteIfMatch(id string, expectedRevision int64) error {
+	if capable, _ := s.conditionalWritesCapable(); !capable {
+		return ErrConditionalWriteUnsupported
+	}
+	args := []string{"delete", "--force", "--json", id, conditionalWriteFlag, strconv.FormatInt(expectedRevision, 10)}
+	return s.runConditionalWrite(id, expectedRevision, args...)
+}
+
+// runConditionalWrite runs a single fenced bd write (…--if-revision N) and
+// returns the classified, caller-finalized error. It is the dedicated retry
+// wrapper for conditional writes and MUST NOT route through
+// runBDTransientWrite: replaying a stale fence after a maybe-committed write is
+// wrong, and blind-retrying a precondition converts a signal into a spin.
+//
+// Retry policy (DESIGN §8.2, validated by the Phase-5 design pass):
+//   - success → nil.
+//   - AMBIGUOUS connection error (isBdAmbiguousWriteError: i/o timeout, reset,
+//     broken pipe, …) → surfaced as-is, NEVER retried: the write may have
+//     committed, so the caller's self-win re-read decides. This branch MUST
+//     precede the serialization branch because isBdTransientWriteError is a
+//     superset of isBdAmbiguousWriteError — retrying a maybe-committed write
+//     would misreport a landed write as a precondition.
+//   - SERIALIZATION-class transient (transient AND not ambiguous: the txn rolled
+//     back) → re-read the revision; if it moved, the fence is permanently stale
+//     (revisions are monotonic and never reused) so return a precondition
+//     immediately rather than replaying a doomed fence; otherwise back off and
+//     retry the SAME argv with the SAME expectedRevision. Re-fencing with a
+//     freshly-read revision would silently downgrade CAS to last-writer-wins.
+//   - everything else → classified as-is.
+//
+// The doltlite --dolt-auto-commit prefix is applied once via bdTransientWriteArgs
+// so a doltlite backend still gets it; the argv is not re-prefixed per attempt.
+func (s *BdStore) runConditionalWrite(id string, expectedRevision int64, args ...string) error {
+	verb := ""
+	if len(args) > 0 {
+		verb = args[0]
+	}
+	prefixed := s.bdTransientWriteArgs(args)
+	var (
+		lastOut []byte
+		lastErr error
+	)
+	for attempt := 1; ; attempt++ {
+		out, err := s.runner(s.dir, "bd", prefixed...)
+		if err == nil {
+			return nil
+		}
+		lastOut, lastErr = out, err
+		if isBdAmbiguousWriteError(err) {
+			break
+		}
+		if isBdTransientWriteError(err) && attempt < conditionalWriteMaxAttempts {
+			if cur, getErr := s.Get(id); getErr == nil && cur.Revision != expectedRevision {
+				return s.finalizeConditionalWrite(id, verb, expectedRevision,
+					&PreconditionFailedError{Current: cur.Revision})
+			}
+			conditionalWriteSleep(conditionalWriteBackoff(attempt))
+			continue
+		}
+		break
+	}
+	return s.finalizeConditionalWrite(id, verb, expectedRevision, classifyConditionalWriteResult(lastOut, lastErr))
+}
+
+// finalizeConditionalWrite stamps the caller-owned fields onto a classified
+// conditional-write error and latches the store on a machine-confirmed
+// unsupported response. Centralizing this here (the only frame that reliably
+// holds both id and expectedRevision) keeps the per-verb wrappers thin and stops
+// the ID/Expected pairing from drifting across them.
+//   - unsupported → latch (authoritative over the probe) and surface.
+//   - precondition → override Expected with the caller's own argument (the
+//     conformance harness asserts this unconditionally) and fill ID when the
+//     backend left it empty; Current is left to the classifier / re-read.
+//   - gate refusal → fill ID/Verb for forensics; never latches.
+func (s *BdStore) finalizeConditionalWrite(id, verb string, expectedRevision int64, err error) error {
+	if err == nil {
+		return nil
+	}
+	if IsConditionalWriteUnsupported(err) {
+		s.markConditionalWritesUnsupported()
+		return err
+	}
+	var pfe *PreconditionFailedError
+	if errors.As(err, &pfe) {
+		if pfe.ID == "" {
+			pfe.ID = id
+		}
+		pfe.Expected = expectedRevision
+		return err
+	}
+	var gre *GateRefusalError
+	if errors.As(err, &gre) {
+		if gre.ID == "" {
+			gre.ID = id
+		}
+		if gre.Verb == "" {
+			gre.Verb = verb
+		}
+		return err
+	}
+	return err
+}
+
+// CompareAndSetMetadataKey atomically sets metadata[key]=next iff the current
+// value equals expected, emulated over bd's revision fence (bd has no value-CAS
+// primitive). The loop is bounded because control/member beads are metadata-hot:
+// an unrelated-key write between the read and the fenced write bumps the revision
+// and produces a spurious precondition even though nobody touched our key.
+// Exhaustion returns *CASRetriesExhaustedError — a transient, distinct from a
+// genuine value loss ((false,nil)) or a precondition — so consumers re-enter
+// level-triggered instead of stranding a reservation (DESIGN §8.4).
+func (s *BdStore) CompareAndSetMetadataKey(id, key, expected, next string) (bool, error) {
+	if capable, _ := s.conditionalWritesCapable(); !capable {
+		return false, ErrConditionalWriteUnsupported
+	}
+	for attempt := 1; ; attempt++ {
+		b, err := s.Get(id)
+		if err != nil {
+			return false, err
+		}
+		// "" ≡ absent: an absent key reads back as "" from the map, so an empty
+		// expected legitimately claims an absent or empty-valued key and only
+		// those.
+		if b.Metadata[key] != expected {
+			return false, nil
+		}
+		// Build the fenced set through bdUpdateArgs so the metadata write carries
+		// the same --json envelope (and future flag handling) as the *IfMatch
+		// verbs; the classifier is body-based and a plain-text error body would
+		// misclassify a precondition into the surface-as-is default.
+		args := append(bdUpdateArgs(id, UpdateOpts{Metadata: map[string]string{key: next}}),
+			conditionalWriteFlag, strconv.FormatInt(b.Revision, 10))
+		err = s.runConditionalWrite(id, b.Revision, args...)
+		switch {
+		case err == nil:
+			return true, nil
+		case IsPreconditionFailed(err):
+			// The revision moved under us; re-read and re-check the value next
+			// lap. The value never mismatched, so exhaustion is a transient, not
+			// a loss.
+			if attempt >= casEmulationMaxAttempts {
+				return false, &CASRetriesExhaustedError{
+					ID: id, Key: key, Attempts: attempt, LastRevision: b.Revision,
+				}
+			}
+			conditionalWriteSleep(conditionalWriteBackoff(attempt))
+		default:
+			// Unsupported (already latched in finalizeConditionalWrite), gate
+			// refusal, or an ambiguous maybe-committed write: surface as-is. An
+			// ambiguous write is deliberately NOT re-checked as a value loss —
+			// doing so would report (false,nil) after the write may have landed.
+			return false, err
+		}
+	}
 }

@@ -1054,8 +1054,13 @@ func (s *BdStore) Get(id string) (Bead, error) {
 	return bead, nil
 }
 
-// Update modifies fields of an existing bead via bd update.
-func (s *BdStore) Update(id string, opts UpdateOpts) error {
+// bdUpdateArgs builds the `bd update` argv for opts, fanning each set field to
+// its flag. The result always begins with the three-element prefix
+// {"update","--json",id}; a return of exactly that prefix means no fields were
+// set (the empty-update no-op that bd itself rejects). It is shared by the
+// unconditional Update and the fenced UpdateIfMatch so a new UpdateOpts field is
+// wired into both paths from one place.
+func bdUpdateArgs(id string, opts UpdateOpts) []string {
 	args := []string{"update", "--json", id}
 	if opts.Title != nil {
 		args = append(args, "--title", *opts.Title)
@@ -1094,6 +1099,12 @@ func (s *BdStore) Update(id string, opts UpdateOpts) error {
 	for _, l := range opts.RemoveLabels {
 		args = append(args, "--remove-label", l)
 	}
+	return args
+}
+
+// Update modifies fields of an existing bead via bd update.
+func (s *BdStore) Update(id string, opts UpdateOpts) error {
+	args := bdUpdateArgs(id, opts)
 	// No fields to update — no-op (bd errors on empty update).
 	if len(args) == 3 {
 		return nil

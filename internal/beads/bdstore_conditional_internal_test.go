@@ -1,9 +1,16 @@
 package beads
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 // TestClassifyConditionalWriteResult exhaustively exercises the pure classifier
@@ -436,4 +443,719 @@ func TestConditionalWritesCapableProbe(t *testing.T) {
 			t.Fatalf("latched store ran %d probe subprocesses, want 0", calls)
 		}
 	})
+}
+
+// --- Phase 5: fenced verbs + retry wrapper + metadata-CAS emulation ---
+
+// scriptedBd is a white-box fake bd backend for the fenced-write tests. It models
+// one bead's revision/status/metadata/existence and interprets the argv BdStore
+// emits for show/update/close/delete plus the capability probe (--help). Unlike
+// bdstore_test.go's fakeRunner (keyed on the exact argv string), it applies
+// mutations to backing state BEFORE returning, so a writeHook can express the
+// committed-but-ambiguous cell and the re-read-on-transient path (DESIGN §7.4).
+type scriptedBd struct {
+	mu             sync.Mutex
+	id             string
+	revision       int64
+	status         string
+	metadata       map[string]string
+	deleted        bool
+	getCalls       int
+	writeCalls     int
+	writeArgv      [][]string
+	sawDoltPrefix  bool
+	probeIncapable bool
+	// writeHook, if non-nil, runs at the start of each write call holding mu. It
+	// may mutate backing and, by returning handled=true, short-circuit the
+	// default fence-and-apply with a canned (out, err).
+	writeHook func(w *scriptedBd, verb string, ifRev int64) (out []byte, err error, handled bool)
+}
+
+func (w *scriptedBd) runner(_, _ string, args ...string) ([]byte, error) {
+	if len(args) >= 2 && args[0] == "--dolt-auto-commit" {
+		w.mu.Lock()
+		w.sawDoltPrefix = true
+		w.mu.Unlock()
+		args = args[2:]
+	}
+	if len(args) == 0 {
+		return nil, errors.New("scriptedBd: empty argv")
+	}
+	if len(args) >= 2 && args[1] == "--help" {
+		return w.helpOutput(args[0]), nil
+	}
+	switch args[0] {
+	case "show":
+		return w.handleShow()
+	case "update", "close", "delete":
+		return w.handleWrite(args[0], args)
+	default:
+		return nil, fmt.Errorf("scriptedBd: unhandled verb %q", args[0])
+	}
+}
+
+func (w *scriptedBd) helpOutput(verb string) []byte {
+	if w.probeIncapable {
+		return []byte("Usage:\n  bd " + verb + " [flags]\n\nFlags:\n  --json   emit JSON\n")
+	}
+	return []byte("Usage:\n  bd " + verb + " [flags]\n\nFlags:\n" +
+		"  --if-revision int   apply only at this revision\n  --json\n")
+}
+
+func (w *scriptedBd) handleShow() ([]byte, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.getCalls++
+	if w.deleted {
+		return nil, errors.New("exit status 1: no issues found matching the provided IDs")
+	}
+	return w.showJSONLocked(), nil
+}
+
+func (w *scriptedBd) showJSONLocked() []byte {
+	status := w.status
+	if status == "" {
+		status = "open"
+	}
+	md, _ := json.Marshal(w.metadata)
+	return []byte(fmt.Sprintf(`[{"id":%q,"status":%q,"revision":%d,"metadata":%s}]`,
+		w.id, status, w.revision, md))
+}
+
+func (w *scriptedBd) handleWrite(verb string, args []string) ([]byte, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.writeCalls++
+	w.writeArgv = append(w.writeArgv, append([]string(nil), args...))
+	ifRev, hasFence := parseIfRevisionArg(args)
+	if w.writeHook != nil {
+		if out, err, handled := w.writeHook(w, verb, ifRev); handled {
+			return out, err
+		}
+	}
+	if w.deleted {
+		return nil, errors.New("exit status 1: no issues found matching the provided IDs")
+	}
+	if hasFence && ifRev != w.revision {
+		return w.preconditionBodyLocked(ifRev), errors.New("exit status 1")
+	}
+	switch verb {
+	case "update":
+		w.applySetMetadataLocked(args)
+	case "close":
+		w.status = "closed"
+	case "delete":
+		w.deleted = true
+	}
+	w.revision++
+	return []byte(`{"ok":true}`), nil
+}
+
+func (w *scriptedBd) preconditionBodyLocked(ifRev int64) []byte {
+	return []byte(fmt.Sprintf(
+		`{"error":"revision precondition failed","code":%q,"expected_revision":%d,"current_revision":%d}`,
+		bdConditionalCodePreconditionFailed, ifRev, w.revision))
+}
+
+func (w *scriptedBd) applySetMetadataLocked(args []string) {
+	if w.metadata == nil {
+		w.metadata = map[string]string{}
+	}
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] == "--set-metadata" {
+			if eq := strings.IndexByte(args[i+1], '='); eq >= 0 {
+				w.metadata[args[i+1][:eq]] = args[i+1][eq+1:]
+			}
+		}
+	}
+}
+
+func parseIfRevisionArg(args []string) (int64, bool) {
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] == conditionalWriteFlag {
+			n, err := strconv.ParseInt(args[i+1], 10, 64)
+			if err != nil {
+				return 0, false
+			}
+			return n, true
+		}
+	}
+	return 0, false
+}
+
+// disableConditionalWriteSleep no-ops the backoff seam for the duration of the
+// test and restores it after. Per the Phase-5 design rule, tests that touch this
+// package-level seam must not run in parallel.
+func disableConditionalWriteSleep(t *testing.T) {
+	t.Helper()
+	prev := conditionalWriteSleep
+	conditionalWriteSleep = func(time.Duration) {}
+	t.Cleanup(func() { conditionalWriteSleep = prev })
+}
+
+func argvContains(argv [][]string, want ...string) bool {
+	for _, call := range argv {
+		if sliceContainsSeq(call, want...) {
+			return true
+		}
+	}
+	return false
+}
+
+func sliceContainsSeq(hay []string, want ...string) bool {
+	for _, w := range want {
+		found := false
+		for _, h := range hay {
+			if h == w {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
+}
+
+func TestUpdateIfMatchSuccessAppliesFence(t *testing.T) {
+	w := &scriptedBd{id: "ga-1", revision: 1, status: "open"}
+	s := NewBdStore("/city", w.runner)
+	title := "renamed"
+	if err := s.UpdateIfMatch("ga-1", 1, UpdateOpts{Title: &title}); err != nil {
+		t.Fatalf("UpdateIfMatch at current revision: %v", err)
+	}
+	if w.revision != 2 {
+		t.Fatalf("revision not bumped: got %d, want 2", w.revision)
+	}
+	if !argvContains(w.writeArgv, "update", "--json", "ga-1", "--title", "renamed", conditionalWriteFlag, "1") {
+		t.Fatalf("fenced update argv missing expected flags: %v", w.writeArgv)
+	}
+}
+
+func TestUpdateIfMatchEmptyOptsIsNoOpNoWrite(t *testing.T) {
+	w := &scriptedBd{id: "ga-1", revision: 1}
+	s := NewBdStore("/city", w.runner)
+	if err := s.UpdateIfMatch("ga-1", 1, UpdateOpts{}); err != nil {
+		t.Fatalf("empty UpdateIfMatch: got %v, want nil", err)
+	}
+	if w.writeCalls != 0 {
+		t.Fatalf("empty UpdateIfMatch issued %d writes, want 0", w.writeCalls)
+	}
+}
+
+func TestUpdateIfMatchPreconditionOverridesExpected(t *testing.T) {
+	// The bd body carries a deliberately WRONG expected_revision; the verb must
+	// override Expected with the caller's own stale argument (the conformance
+	// harness asserts this), while Current stays from the body.
+	w := &scriptedBd{id: "ga-1", revision: 5}
+	w.writeHook = func(_ *scriptedBd, _ string, _ int64) ([]byte, error, bool) {
+		return []byte(`{"code":"precondition-failed","expected_revision":4242,"current_revision":5}`),
+			errors.New("exit status 1"), true
+	}
+	s := NewBdStore("/city", w.runner)
+
+	err := s.UpdateIfMatch("ga-1", 3, UpdateOpts{Title: strptr("x")})
+	var pfe *PreconditionFailedError
+	if !errors.As(err, &pfe) {
+		t.Fatalf("UpdateIfMatch stale: got %v, want *PreconditionFailedError", err)
+	}
+	if pfe.ID != "ga-1" {
+		t.Fatalf("PreconditionFailedError.ID = %q, want ga-1", pfe.ID)
+	}
+	if pfe.Expected != 3 {
+		t.Fatalf("PreconditionFailedError.Expected = %d, want 3 (caller's stale revision, not the body's 4242)", pfe.Expected)
+	}
+	if pfe.Current != 5 {
+		t.Fatalf("PreconditionFailedError.Current = %d, want 5 (from the bd body)", pfe.Current)
+	}
+}
+
+func TestConditionalVerbsIncapableReturnUnsupportedNoWrite(t *testing.T) {
+	w := &scriptedBd{id: "ga-1", revision: 1, probeIncapable: true}
+	s := NewBdStore("/city", w.runner)
+	if err := s.UpdateIfMatch("ga-1", 1, UpdateOpts{Title: strptr("x")}); !IsConditionalWriteUnsupported(err) {
+		t.Fatalf("UpdateIfMatch on incapable bd: got %v, want ErrConditionalWriteUnsupported", err)
+	}
+	if err := s.CloseIfMatch("ga-1", 1); !IsConditionalWriteUnsupported(err) {
+		t.Fatalf("CloseIfMatch on incapable bd: got %v, want ErrConditionalWriteUnsupported", err)
+	}
+	if err := s.DeleteIfMatch("ga-1", 1); !IsConditionalWriteUnsupported(err) {
+		t.Fatalf("DeleteIfMatch on incapable bd: got %v, want ErrConditionalWriteUnsupported", err)
+	}
+	if w.writeCalls != 0 {
+		t.Fatalf("incapable store issued %d fenced writes, want 0 (never fall through to an unconditional write)", w.writeCalls)
+	}
+}
+
+func TestUpdateIfMatchRuntimeUnsupportedLatches(t *testing.T) {
+	// The probe passes, but the write rejects --if-revision at runtime (a bd
+	// downgraded under a drifted PATH). The verb must return unsupported AND latch
+	// the store so no further fenced write is even attempted.
+	w := &scriptedBd{id: "ga-1", revision: 1}
+	w.writeHook = func(_ *scriptedBd, _ string, _ int64) ([]byte, error, bool) {
+		return nil, errors.New("exit status 1: unknown flag: --if-revision"), true
+	}
+	s := NewBdStore("/city", w.runner)
+
+	if err := s.UpdateIfMatch("ga-1", 1, UpdateOpts{Title: strptr("x")}); !IsConditionalWriteUnsupported(err) {
+		t.Fatalf("runtime unsupported: got %v, want ErrConditionalWriteUnsupported", err)
+	}
+	if w.writeCalls != 1 {
+		t.Fatalf("first UpdateIfMatch issued %d writes, want 1", w.writeCalls)
+	}
+	// Latched: the second verb short-circuits before any write.
+	if err := s.CloseIfMatch("ga-1", 1); !IsConditionalWriteUnsupported(err) {
+		t.Fatalf("after latch: got %v, want ErrConditionalWriteUnsupported", err)
+	}
+	if w.writeCalls != 1 {
+		t.Fatalf("latched store attempted another write: writeCalls = %d, want 1", w.writeCalls)
+	}
+}
+
+func TestCloseIfMatchAndDeleteIfMatchFenceArgvAndApply(t *testing.T) {
+	t.Run("close success", func(t *testing.T) {
+		w := &scriptedBd{id: "ga-1", revision: 2, status: "open"}
+		s := NewBdStore("/city", w.runner)
+		if err := s.CloseIfMatch("ga-1", 2); err != nil {
+			t.Fatalf("CloseIfMatch: %v", err)
+		}
+		if w.status != "closed" || w.revision != 3 {
+			t.Fatalf("close not applied: status=%q revision=%d", w.status, w.revision)
+		}
+		if !argvContains(w.writeArgv, "close", "--force", "--json", "ga-1", conditionalWriteFlag, "2") {
+			t.Fatalf("fenced close argv missing expected flags: %v", w.writeArgv)
+		}
+	})
+	t.Run("delete success", func(t *testing.T) {
+		w := &scriptedBd{id: "ga-1", revision: 4, status: "open"}
+		s := NewBdStore("/city", w.runner)
+		if err := s.DeleteIfMatch("ga-1", 4); err != nil {
+			t.Fatalf("DeleteIfMatch: %v", err)
+		}
+		if !w.deleted {
+			t.Fatal("delete not applied")
+		}
+		if !argvContains(w.writeArgv, "delete", "--force", "--json", "ga-1", conditionalWriteFlag, "4") {
+			t.Fatalf("fenced delete argv missing expected flags: %v", w.writeArgv)
+		}
+	})
+	t.Run("close precondition on stale revision", func(t *testing.T) {
+		w := &scriptedBd{id: "ga-1", revision: 9, status: "open"}
+		s := NewBdStore("/city", w.runner)
+		err := s.CloseIfMatch("ga-1", 2)
+		var pfe *PreconditionFailedError
+		if !errors.As(err, &pfe) || pfe.Expected != 2 {
+			t.Fatalf("CloseIfMatch stale: got %v, want *PreconditionFailedError{Expected:2}", err)
+		}
+		if w.status == "closed" {
+			t.Fatal("stale CloseIfMatch closed the bead anyway")
+		}
+	})
+}
+
+func TestConditionalWriteAppliesDoltlitePrefix(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, ".beads"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".beads", "metadata.json"), []byte(`{"backend":"doltlite"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	w := &scriptedBd{id: "ga-1", revision: 1, status: "open"}
+	s := NewBdStore(dir, w.runner)
+	if err := s.UpdateIfMatch("ga-1", 1, UpdateOpts{Title: strptr("x")}); err != nil {
+		t.Fatalf("UpdateIfMatch on doltlite store: %v", err)
+	}
+	if !w.sawDoltPrefix {
+		t.Fatal("fenced write on a doltlite backend did not carry the --dolt-auto-commit off prefix")
+	}
+}
+
+func TestRunConditionalWriteRetriesSerializationSameRevision(t *testing.T) {
+	// A serialization conflict rolled the write back; the re-read shows the
+	// revision unchanged, so the retry replays the same fence and succeeds.
+	disableConditionalWriteSleep(t)
+	var writes int
+	w := &scriptedBd{id: "ga-1", revision: 1, status: "open"}
+	w.writeHook = func(_ *scriptedBd, _ string, _ int64) ([]byte, error, bool) {
+		writes++
+		if writes == 1 {
+			return nil, errors.New("exit status 1: Error 1213 (40001): serialization failure"), true
+		}
+		return nil, nil, false // fall through to default apply
+	}
+	s := NewBdStore("/city", w.runner)
+
+	if err := s.UpdateIfMatch("ga-1", 1, UpdateOpts{Title: strptr("x")}); err != nil {
+		t.Fatalf("serialization retry: got %v, want nil (retry should succeed)", err)
+	}
+	if w.writeCalls != 2 {
+		t.Fatalf("write attempts = %d, want 2 (one serialization + one success)", w.writeCalls)
+	}
+	if w.getCalls != 1 {
+		t.Fatalf("re-read count = %d, want 1 (revision re-read before retry)", w.getCalls)
+	}
+}
+
+func TestRunConditionalWriteSerializationReReadMovedIsPreconditionNoReplay(t *testing.T) {
+	// The serialization retry re-reads and finds the revision moved (someone else
+	// committed). The fence is now permanently stale, so it must surface a
+	// precondition WITHOUT replaying the fenced write.
+	disableConditionalWriteSleep(t)
+	w := &scriptedBd{id: "ga-1", revision: 1, status: "open"}
+	w.writeHook = func(w *scriptedBd, _ string, _ int64) ([]byte, error, bool) {
+		w.revision = 7 // an interleaving writer advanced the bead
+		return nil, errors.New("exit status 1: Error 1213 (40001): serialization failure"), true
+	}
+	s := NewBdStore("/city", w.runner)
+
+	err := s.UpdateIfMatch("ga-1", 1, UpdateOpts{Title: strptr("x")})
+	var pfe *PreconditionFailedError
+	if !errors.As(err, &pfe) {
+		t.Fatalf("moved-revision serialization: got %v, want *PreconditionFailedError", err)
+	}
+	if pfe.Expected != 1 || pfe.Current != 7 {
+		t.Fatalf("precondition = {Expected:%d, Current:%d}, want {1, 7}", pfe.Expected, pfe.Current)
+	}
+	if w.writeCalls != 1 {
+		t.Fatalf("write attempts = %d, want 1 (a stale fence must never be replayed)", w.writeCalls)
+	}
+}
+
+func TestRunConditionalWriteAmbiguousSurfacesAsIsNoRetry(t *testing.T) {
+	// A committed-but-ambiguous write: the backend applied the change, then the
+	// connection dropped. It must surface as-is (never a precondition/unsupported)
+	// and never be retried, so the caller's self-win re-read decides.
+	disableConditionalWriteSleep(t)
+	w := &scriptedBd{id: "ga-1", revision: 1, status: "open", metadata: map[string]string{}}
+	w.writeHook = func(w *scriptedBd, _ string, _ int64) ([]byte, error, bool) {
+		w.metadata["k"] = "committed" // the write landed
+		w.revision++
+		return nil, errors.New("exit status 1: i/o timeout"), true
+	}
+	s := NewBdStore("/city", w.runner)
+
+	err := s.UpdateIfMatch("ga-1", 1, UpdateOpts{Metadata: map[string]string{"k": "committed"}})
+	if err == nil {
+		t.Fatal("ambiguous write must surface an error, not nil")
+	}
+	if IsPreconditionFailed(err) || IsConditionalWriteUnsupported(err) {
+		t.Fatalf("ambiguous write misclassified: %v", err)
+	}
+	if !strings.Contains(err.Error(), "i/o timeout") {
+		t.Fatalf("ambiguous error not surfaced as-is: %v", err)
+	}
+	if w.writeCalls != 1 {
+		t.Fatalf("ambiguous write retried: writeCalls = %d, want 1", w.writeCalls)
+	}
+	if w.metadata["k"] != "committed" {
+		t.Fatalf("backing lost the committed write: %q", w.metadata["k"])
+	}
+}
+
+func TestCompareAndSetMetadataKeyWin(t *testing.T) {
+	w := &scriptedBd{id: "ga-1", revision: 1, status: "open"}
+	s := NewBdStore("/city", w.runner)
+	ok, err := s.CompareAndSetMetadataKey("ga-1", "k", "", "first")
+	if err != nil || !ok {
+		t.Fatalf("claim absent key: (%v, %v), want (true, nil)", ok, err)
+	}
+	if w.metadata["k"] != "first" {
+		t.Fatalf("value after CAS = %q, want first", w.metadata["k"])
+	}
+	if !argvContains(w.writeArgv, "update", "--set-metadata", "k=first", conditionalWriteFlag, "1") {
+		t.Fatalf("CAS fenced update argv missing expected flags: %v", w.writeArgv)
+	}
+}
+
+func TestCompareAndSetMetadataKeyEmptyExpectedClaimsAbsentOrEmptyOnly(t *testing.T) {
+	w := &scriptedBd{id: "ga-1", revision: 1, status: "open"}
+	s := NewBdStore("/city", w.runner)
+	if ok, err := s.CompareAndSetMetadataKey("ga-1", "k", "", "one"); err != nil || !ok {
+		t.Fatalf("claim absent: (%v, %v), want (true, nil)", ok, err)
+	}
+	// Empty-valued key: expected "" still claims it.
+	w.mu.Lock()
+	w.metadata["k"] = ""
+	w.revision++
+	w.mu.Unlock()
+	if ok, err := s.CompareAndSetMetadataKey("ga-1", "k", "", "two"); err != nil || !ok {
+		t.Fatalf("claim empty-valued: (%v, %v), want (true, nil)", ok, err)
+	}
+	// Non-empty key: expected "" must NOT claim it.
+	if ok, err := s.CompareAndSetMetadataKey("ga-1", "k", "", "three"); err != nil || ok {
+		t.Fatalf("claim non-empty with empty expected: (%v, %v), want (false, nil)", ok, err)
+	}
+	if w.metadata["k"] != "two" {
+		t.Fatalf("value after rejected CAS = %q, want two", w.metadata["k"])
+	}
+}
+
+func TestCompareAndSetMetadataKeyValueMismatchNoWrite(t *testing.T) {
+	w := &scriptedBd{id: "ga-1", revision: 1, status: "open", metadata: map[string]string{"k": "A"}}
+	s := NewBdStore("/city", w.runner)
+	ok, err := s.CompareAndSetMetadataKey("ga-1", "k", "B", "C")
+	if err != nil {
+		t.Fatalf("value-mismatch CAS returned error: %v", err)
+	}
+	if ok {
+		t.Fatal("value-mismatch CAS returned true, want false")
+	}
+	if w.writeCalls != 0 {
+		t.Fatalf("value-mismatch CAS issued %d writes, want 0", w.writeCalls)
+	}
+	if w.metadata["k"] != "A" {
+		t.Fatalf("value mutated on a lost CAS: %q, want A", w.metadata["k"])
+	}
+}
+
+func TestCompareAndSetMetadataKeyPreconditionRetryThenWin(t *testing.T) {
+	// The first fenced write hits a precondition because an unrelated-key write
+	// bumped the revision; our key value is untouched, so the retry re-reads and
+	// wins.
+	disableConditionalWriteSleep(t)
+	var writes int
+	w := &scriptedBd{id: "ga-1", revision: 1, status: "open", metadata: map[string]string{"k": "start"}}
+	w.writeHook = func(w *scriptedBd, _ string, _ int64) ([]byte, error, bool) {
+		writes++
+		if writes == 1 {
+			w.revision++ // unrelated-key writer moved the bead; our value stays "start"
+			return w.preconditionBodyLocked(1), errors.New("exit status 1"), true
+		}
+		return nil, nil, false // retry falls through to default apply
+	}
+	s := NewBdStore("/city", w.runner)
+
+	ok, err := s.CompareAndSetMetadataKey("ga-1", "k", "start", "won")
+	if err != nil || !ok {
+		t.Fatalf("precondition-retry CAS: (%v, %v), want (true, nil)", ok, err)
+	}
+	if w.metadata["k"] != "won" {
+		t.Fatalf("value after retry win = %q, want won", w.metadata["k"])
+	}
+	if w.writeCalls != 2 {
+		t.Fatalf("CAS write attempts = %d, want 2", w.writeCalls)
+	}
+}
+
+func TestCompareAndSetMetadataKeyExhaustionIsTypedNotPrecondition(t *testing.T) {
+	// Persistent cross-key interference: every fenced write hits a precondition
+	// because the revision keeps moving, but our value never mismatches. The loop
+	// must exhaust to *CASRetriesExhaustedError — NOT a precondition and NOT
+	// (false, nil).
+	disableConditionalWriteSleep(t)
+	w := &scriptedBd{id: "ga-1", revision: 1, status: "open", metadata: map[string]string{"k": "start"}}
+	w.writeHook = func(w *scriptedBd, _ string, _ int64) ([]byte, error, bool) {
+		w.revision++ // every attempt races a fresh unrelated write
+		return w.preconditionBodyLocked(0), errors.New("exit status 1"), true
+	}
+	s := NewBdStore("/city", w.runner)
+
+	ok, err := s.CompareAndSetMetadataKey("ga-1", "k", "start", "won")
+	if ok {
+		t.Fatal("exhausted CAS returned true")
+	}
+	if !IsCASRetriesExhausted(err) {
+		t.Fatalf("exhaustion error = %v, want *CASRetriesExhaustedError", err)
+	}
+	if IsPreconditionFailed(err) {
+		t.Fatalf("exhaustion must NOT be a precondition (the value never mismatched): %v", err)
+	}
+	var cre *CASRetriesExhaustedError
+	errors.As(err, &cre)
+	if cre.Attempts != casEmulationMaxAttempts {
+		t.Fatalf("CASRetriesExhaustedError.Attempts = %d, want %d", cre.Attempts, casEmulationMaxAttempts)
+	}
+	if w.writeCalls != casEmulationMaxAttempts {
+		t.Fatalf("CAS write attempts = %d, want %d", w.writeCalls, casEmulationMaxAttempts)
+	}
+}
+
+func TestCompareAndSetMetadataKeyIncapable(t *testing.T) {
+	w := &scriptedBd{id: "ga-1", revision: 1, probeIncapable: true}
+	s := NewBdStore("/city", w.runner)
+	ok, err := s.CompareAndSetMetadataKey("ga-1", "k", "", "v")
+	if ok || !IsConditionalWriteUnsupported(err) {
+		t.Fatalf("CAS on incapable bd: (%v, %v), want (false, ErrConditionalWriteUnsupported)", ok, err)
+	}
+	if w.writeCalls != 0 || w.getCalls != 0 {
+		t.Fatalf("incapable CAS touched the store: writes=%d gets=%d, want 0/0", w.writeCalls, w.getCalls)
+	}
+}
+
+func TestCompareAndSetMetadataKeyRuntimeUnsupportedLatches(t *testing.T) {
+	w := &scriptedBd{id: "ga-1", revision: 1, status: "open"}
+	w.writeHook = func(_ *scriptedBd, _ string, _ int64) ([]byte, error, bool) {
+		return nil, errors.New("exit status 1: unknown flag: --if-revision"), true
+	}
+	s := NewBdStore("/city", w.runner)
+
+	if ok, err := s.CompareAndSetMetadataKey("ga-1", "k", "", "v"); ok || !IsConditionalWriteUnsupported(err) {
+		t.Fatalf("first CAS: (%v, %v), want (false, ErrConditionalWriteUnsupported)", ok, err)
+	}
+	gets, writes := w.getCalls, w.writeCalls
+	// Latched: the second CAS short-circuits before any Get or write.
+	if ok, err := s.CompareAndSetMetadataKey("ga-1", "k", "", "v"); ok || !IsConditionalWriteUnsupported(err) {
+		t.Fatalf("second CAS after latch: (%v, %v), want (false, ErrConditionalWriteUnsupported)", ok, err)
+	}
+	if w.getCalls != gets || w.writeCalls != writes {
+		t.Fatalf("latched CAS touched the store again: gets %d->%d, writes %d->%d", gets, w.getCalls, writes, w.writeCalls)
+	}
+}
+
+func TestCompareAndSetMetadataKeyContention(t *testing.T) {
+	// The concurrency leg: 16 racers CAS the same starting value to distinct
+	// values. Exactly one wins; the rest observe the winner's value and lose
+	// cleanly (false, nil), never error, never a second winner. Run under -race.
+	disableConditionalWriteSleep(t)
+	w := &scriptedBd{id: "ga-1", revision: 1, status: "open", metadata: map[string]string{"k": "start"}}
+	s := NewBdStore("/city", w.runner)
+
+	const racers = 16
+	var (
+		wg      sync.WaitGroup
+		mu      sync.Mutex
+		winners []string
+		errs    []error
+	)
+	start := make(chan struct{})
+	for i := 0; i < racers; i++ {
+		wg.Add(1)
+		val := "racer-" + strconv.Itoa(i)
+		go func(val string) {
+			defer wg.Done()
+			<-start
+			ok, err := s.CompareAndSetMetadataKey("ga-1", "k", "start", val)
+			mu.Lock()
+			defer mu.Unlock()
+			switch {
+			case err != nil:
+				errs = append(errs, err)
+			case ok:
+				winners = append(winners, val)
+			}
+		}(val)
+	}
+	close(start)
+	wg.Wait()
+
+	if len(errs) != 0 {
+		t.Fatalf("contention must resolve to true/false, not error: %v", errs)
+	}
+	if len(winners) != 1 {
+		t.Fatalf("exactly one racer must win, got %d: %v", len(winners), winners)
+	}
+	if w.metadata["k"] != winners[0] {
+		t.Fatalf("final value %q does not match the sole winner %q", w.metadata["k"], winners[0])
+	}
+}
+
+func strptr(s string) *string { return &s }
+
+func TestCompareAndSetMetadataKeyAmbiguousSurfacesAsIs(t *testing.T) {
+	// A committed-but-ambiguous fenced write inside the CAS loop must surface
+	// as-is — NEVER be retried and NEVER be re-checked as a value loss. Retrying
+	// or re-reading would report (false,nil) after our write may have landed,
+	// stranding a claim the caller actually won (red-team finding 3).
+	disableConditionalWriteSleep(t)
+	w := &scriptedBd{id: "ga-1", revision: 1, status: "open", metadata: map[string]string{"k": "start"}}
+	w.writeHook = func(_ *scriptedBd, _ string, _ int64) ([]byte, error, bool) {
+		return nil, errors.New("exit status 1: i/o timeout"), true
+	}
+	s := NewBdStore("/city", w.runner)
+
+	ok, err := s.CompareAndSetMetadataKey("ga-1", "k", "start", "won")
+	if ok {
+		t.Fatal("ambiguous CAS returned true")
+	}
+	if err == nil || IsPreconditionFailed(err) {
+		t.Fatalf("ambiguous CAS = (%v, %v), want (false, the ambiguous error as-is)", ok, err)
+	}
+	if !strings.Contains(err.Error(), "i/o timeout") {
+		t.Fatalf("ambiguous CAS error not surfaced as-is: %v", err)
+	}
+	if w.writeCalls != 1 {
+		t.Fatalf("ambiguous CAS retried: writeCalls = %d, want 1", w.writeCalls)
+	}
+	if w.getCalls != 1 {
+		t.Fatalf("ambiguous CAS re-read after the write: getCalls = %d, want 1", w.getCalls)
+	}
+}
+
+func TestRunConditionalWriteSerializationExhaustionSurfacesRaw(t *testing.T) {
+	// Persistent serialization failure with a stable revision must retry exactly
+	// conditionalWriteMaxAttempts times and then surface the raw transient error —
+	// bounded, and never masked as a precondition or unsupported (red-team
+	// finding 4: guards the retry-bound off-by-one / unbounded-loop mutants).
+	disableConditionalWriteSleep(t)
+	w := &scriptedBd{id: "ga-1", revision: 1, status: "open"}
+	w.writeHook = func(_ *scriptedBd, _ string, _ int64) ([]byte, error, bool) {
+		return nil, errors.New("exit status 1: Error 1213 (40001): serialization failure"), true
+	}
+	s := NewBdStore("/city", w.runner)
+
+	err := s.UpdateIfMatch("ga-1", 1, UpdateOpts{Title: strptr("x")})
+	if err == nil {
+		t.Fatal("persistent serialization failure returned nil")
+	}
+	if IsPreconditionFailed(err) || IsConditionalWriteUnsupported(err) {
+		t.Fatalf("serialization exhaustion misclassified: %v", err)
+	}
+	if !strings.Contains(err.Error(), "serialization failure") {
+		t.Fatalf("serialization error not surfaced raw: %v", err)
+	}
+	if w.writeCalls != conditionalWriteMaxAttempts {
+		t.Fatalf("serialization write attempts = %d, want %d", w.writeCalls, conditionalWriteMaxAttempts)
+	}
+	if w.getCalls != conditionalWriteMaxAttempts-1 {
+		t.Fatalf("serialization re-reads = %d, want %d (one before each retry)", w.getCalls, conditionalWriteMaxAttempts-1)
+	}
+}
+
+func TestDeleteIfMatchOnMissingSurfacesNotFound(t *testing.T) {
+	// A fenced delete of an already-gone bead surfaces ErrNotFound (idempotent,
+	// consistent with unconditional Delete) — not swallowed to nil, not a
+	// precondition (red-team finding 5).
+	w := &scriptedBd{id: "ga-1", revision: 1, deleted: true}
+	s := NewBdStore("/city", w.runner)
+	err := s.DeleteIfMatch("ga-1", 1)
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("DeleteIfMatch on missing bead: got %v, want ErrNotFound", err)
+	}
+	if IsPreconditionFailed(err) {
+		t.Fatalf("missing-bead delete misread as precondition: %v", err)
+	}
+}
+
+func TestConditionalWriteGateRefusalStampsIDAndVerb(t *testing.T) {
+	// A policy gate refusal (e.g. bd's close-authority guard) must surface as a
+	// *GateRefusalError with the ID and refused verb stamped for forensics, and
+	// must NOT latch the store (red-team finding 5).
+	w := &scriptedBd{id: "ga-1", revision: 2, status: "open"}
+	w.writeHook = func(_ *scriptedBd, _ string, _ int64) ([]byte, error, bool) {
+		return []byte(`{"error":"close authority required","code":"close-authority-required"}`),
+			errors.New("exit status 1"), true
+	}
+	s := NewBdStore("/city", w.runner)
+
+	err := s.CloseIfMatch("ga-1", 2)
+	var gre *GateRefusalError
+	if !errors.As(err, &gre) {
+		t.Fatalf("gate refusal: got %v, want *GateRefusalError", err)
+	}
+	if gre.ID != "ga-1" || gre.Verb != "close" || gre.Code != "close-authority-required" {
+		t.Fatalf("GateRefusalError = {ID:%q, Verb:%q, Code:%q}, want {ga-1, close, close-authority-required}", gre.ID, gre.Verb, gre.Code)
+	}
+	if IsConditionalWriteUnsupported(err) {
+		t.Fatal("a policy gate refusal must NOT latch the store incapable")
+	}
+	// A second fenced write still runs (store not latched): the probe is memoized
+	// but the write is attempted.
+	if err := s.CloseIfMatch("ga-1", 2); !errors.As(err, &gre) {
+		t.Fatalf("second gate refusal: got %v, want *GateRefusalError (store must not have latched)", err)
+	}
+	if w.writeCalls != 2 {
+		t.Fatalf("gate refusal latched the store: writeCalls = %d, want 2", w.writeCalls)
+	}
 }
