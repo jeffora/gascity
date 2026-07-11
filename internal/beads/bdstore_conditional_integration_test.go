@@ -25,8 +25,8 @@ import (
 // exact decision production makes before degrading. The scaffold leg still
 // runs against any bd so the scope recipe cannot rot while the row waits.
 //
-// Of the three adversarial classifier inputs recorded in
-// PR-S2a-BUILD-SPEC.md (~line 250), only (A) — a capable bd's cobra usage
+// Of the three adversarial classifier inputs the classifier build recorded
+// as integration-row obligations, only (A) — a capable bd's cobra usage
 // echo naming --if-revision while reporting a DIFFERENT unknown flag — is
 // reliably producible against a live bd, and it runs here. (B) a policy gate
 // refusal carrying an informational current_revision and (C) a coded refusal
@@ -163,7 +163,7 @@ func newConditionalIntegrationBdStore(t *testing.T) (*beads.BdStore, string) {
 // newConditionalIntegrationRunner pins BEADS_DIR to the scope so every bd
 // invocation resolves the scope-local embedded database, and force-clears the
 // dolt-server env knobs: a dev shell with BEADS_DOLT_SERVER_HOST/PORT (a live
-// maintainer-city dolt) or BEADS_DOLT_AUTO_START=1 exported must never make
+// deployment's dolt server) or BEADS_DOLT_AUTO_START=1 exported must never make
 // this row write a tst database into a live server or leave a dolt sql-server
 // running in the TempDir. (CI's packages shard runs under env -i and is safe
 // either way; this guards local runs.)

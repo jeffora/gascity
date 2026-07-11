@@ -5,7 +5,7 @@
 // A rollout gate is NOT an agent-capability flag. It gates internal transport
 // paths (which store CAS verb to call, which migration branch to run) that are
 // invisible to prompts and cannot express per-agent behavior — the design keeps
-// the "no capability flags" exclusion intact (see engdocs/plans/feature-flags).
+// the "no capability flags" exclusion intact.
 //
 // The package is deliberately narrow in its dependencies: it imports only the
 // standard library and internal/config (and, reserved, internal/deps). It must
