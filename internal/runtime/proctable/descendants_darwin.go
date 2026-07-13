@@ -10,9 +10,13 @@ import (
 	"strings"
 )
 
-// snapshotProcesses shells out to `ps` for a host-wide pid/ppid/comm table.
+// snapshotProcesses shells out to `ps` for a host-wide pid/ppid/comm table,
+// plus (via the eww flag) each process's inline environment so GC_SESSION_ID
+// can be captured in the same read — no second ps invocation, no
+// liveScanGuard (that guard protects the orphan sweep in ScanBySessionID, not
+// this read-only liveness snapshot).
 func snapshotProcesses() ([]ProcessRecord, error) {
-	out, err := exec.Command("ps", "-ax", "-o", "pid=,ppid=,comm=").Output()
+	out, err := exec.Command("ps", "eww", "-ax", "-o", "pid=,ppid=,comm=,command=").Output()
 	if err != nil {
 		return nil, fmt.Errorf("running ps: %w", err)
 	}
@@ -34,7 +38,11 @@ func snapshotProcesses() ([]ProcessRecord, error) {
 		if err != nil {
 			continue
 		}
-		records = append(records, ProcessRecord{PID: pid, PPID: ppid, Name: filepath.Base(fields[2])})
+		rec := ProcessRecord{PID: pid, PPID: ppid, Name: filepath.Base(fields[2])}
+		if len(fields) > 3 {
+			rec.SessionID = parseInlineEnv(fields[3:])["GC_SESSION_ID"]
+		}
+		records = append(records, rec)
 	}
 	return records, nil
 }

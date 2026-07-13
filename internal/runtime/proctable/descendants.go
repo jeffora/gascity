@@ -3,9 +3,10 @@ package proctable
 // ProcessRecord is one process in a host-wide snapshot used for descendant
 // liveness matching.
 type ProcessRecord struct {
-	PID  int
-	PPID int
-	Name string // basename of the process's command
+	PID       int
+	PPID      int
+	Name      string // basename of the process's command
+	SessionID string // GC_SESSION_ID from the process's env, if present ("" if absent/unreadable)
 }
 
 // SnapshotProcesses returns a host-wide process snapshot (pid, ppid, command
