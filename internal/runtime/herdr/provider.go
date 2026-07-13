@@ -82,6 +82,18 @@ func (p *Provider) Start(ctx context.Context, name string, cfg runtime.Config) e
 	if err != nil {
 		return fmt.Errorf("herdr: start %q: %w", name, err)
 	}
+	// Persist GC_SESSION_ID into the sidecar (tmux parity: tmux captures its
+	// creation environment into the session automatically; herdr has no such
+	// capture, so ProcessAlive's session-scoped tree-walk widening has nothing
+	// to read without this). Process env survives reparenting (only ppid
+	// changes), so this is what lets the walk find the agent when it is no
+	// longer a descendant of the pane's shell/foreground PIDs. Stop already
+	// clears the whole meta dir, so teardown is covered.
+	if sessionID := strings.TrimSpace(cfg.Env["GC_SESSION_ID"]); sessionID != "" {
+		if err := p.SetMeta(name, "GC_SESSION_ID", sessionID); err != nil {
+			fmt.Fprintf(os.Stderr, "herdr: persist GC_SESSION_ID for %q: %v\n", name, err) //nolint:errcheck // best-effort sidecar write
+		}
+	}
 	// herdr auto-spawns a stray shell pane when it creates a workspace/tab; close
 	// it so the tab holds only the agent.
 	if strayPane != "" && strayPane != info.PaneID {
@@ -230,15 +242,22 @@ func (p *Provider) ProcessAlive(name string, processNames []string) bool {
 			}
 		}
 	}
-	return processTreeAlive(shellPID, fg, processNames)
+	sessionID, _ := p.GetMeta(name, "GC_SESSION_ID")
+	return processTreeAlive(shellPID, fg, processNames, strings.TrimSpace(sessionID))
 }
 
 // processTreeAlive is the descendant-walk fallback for ProcessAlive: it takes
 // a host-wide process snapshot and checks whether any process reachable from
-// the pane's shell PID or foreground PIDs matches one of processNames.
+// the pane's shell PID or foreground PIDs matches one of processNames. When
+// sessionID is non-empty, every process in the snapshot carrying that
+// GC_SESSION_ID is also treated as a root — this widens the walk to find the
+// agent even when it has been reparented off the shell/foreground subtree,
+// since process env (unlike ppid) survives reparenting. Purely additive: it
+// never narrows the shell/foreground-rooted match, so a genuinely-dead agent
+// still reports false.
 var snapshotProcesses = proctable.SnapshotProcesses
 
-func processTreeAlive(shellPID int, fg []proc, processNames []string) bool {
+func processTreeAlive(shellPID int, fg []proc, processNames []string, sessionID string) bool {
 	records, err := snapshotProcesses()
 	if err != nil || len(records) == 0 {
 		return false
@@ -249,6 +268,13 @@ func processTreeAlive(shellPID int, fg []proc, processNames []string) bool {
 	}
 	for _, pr := range fg {
 		roots = append(roots, pr.PID)
+	}
+	if sessionID != "" {
+		for _, r := range records {
+			if r.SessionID == sessionID {
+				roots = append(roots, r.PID)
+			}
+		}
 	}
 	return proctable.DescendantAlive(records, roots, processNames)
 }
