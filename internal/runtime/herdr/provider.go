@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/gastownhall/gascity/internal/runtime"
+	"github.com/gastownhall/gascity/internal/runtime/proctable"
 	"github.com/gastownhall/gascity/internal/shellquote"
 )
 
@@ -198,6 +199,17 @@ func (p *Provider) Attach(name string) error {
 
 // ProcessAlive reports whether the agent's pane has a live foreground process,
 // optionally requiring one of processNames to be present.
+//
+// Foreground-process matching alone misses an agent that runs as a
+// descendant of a wrapper process rather than as the pane's foreground itself
+// — e.g. a mayor session launched under macOS `caffeinate` (a keep-awake
+// wrapper): caffeinate stays the pane's reported foreground for the agent's
+// entire lifetime, with the agent running underneath it as a child. That
+// foreground-only check reports Alive=false for a session that is very much
+// alive, which upstream (lifecycle_projection.go) reads as "runtime missing"
+// and drives an endless respawn loop. So: check the cheap foreground list
+// first, then fall back to a host process-table walk from the pane's shell
+// and foreground PIDs to catch a wanted name living deeper in the tree.
 func (p *Provider) ProcessAlive(name string, processNames []string) bool {
 	ctx := context.Background()
 	pid, err := p.paneID(ctx, name)
@@ -218,7 +230,27 @@ func (p *Provider) ProcessAlive(name string, processNames []string) bool {
 			}
 		}
 	}
-	return false
+	return processTreeAlive(shellPID, fg, processNames)
+}
+
+// processTreeAlive is the descendant-walk fallback for ProcessAlive: it takes
+// a host-wide process snapshot and checks whether any process reachable from
+// the pane's shell PID or foreground PIDs matches one of processNames.
+var snapshotProcesses = proctable.SnapshotProcesses
+
+func processTreeAlive(shellPID int, fg []proc, processNames []string) bool {
+	records, err := snapshotProcesses()
+	if err != nil || len(records) == 0 {
+		return false
+	}
+	roots := make([]int, 0, len(fg)+1)
+	if shellPID != 0 {
+		roots = append(roots, shellPID)
+	}
+	for _, pr := range fg {
+		roots = append(roots, pr.PID)
+	}
+	return proctable.DescendantAlive(records, roots, processNames)
 }
 
 // Nudge injects and submits text into a running agent's input.
