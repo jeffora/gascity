@@ -226,6 +226,26 @@ func resolveTemplate(p *agentBuildParams, cfgAgent *config.Agent, qualifiedName 
 			Probed: true, ContentHash: runtime.HashPathContent(scriptsDir),
 		})
 	}
+	// Rig-scoped agents (and the pool/dispatcher sessions that run in a rig's
+	// context) can ship their own gate/check scripts under the rig's own
+	// "scripts/" tree rather than the city root's. Without staging those too,
+	// a relative gc.check_path (e.g. ".gc/scripts/checks/<name>.sh") resolves
+	// against the session's ephemeral work dir, which only ever had the
+	// city-root scripts copied in — so a rig-owned check script silently
+	// fails to resolve there and the gate hard-fails with no diagnostic
+	// (ga-c7m Root B). Staged to the same RelDst as the city-level copy above
+	// so rig scripts merge into (and can shadow) city-level ones instead of
+	// replacing them; stageCopyFiles/overlay.CopyDir merge directory trees
+	// rather than clobbering the destination.
+	if rigRoot != "" {
+		rigScriptsDir := citylayout.ScriptsPath(rigRoot)
+		if info, sErr := os.Stat(rigScriptsDir); sErr == nil && info.IsDir() {
+			copyFiles = append(copyFiles, runtime.CopyEntry{
+				Src: rigScriptsDir, RelDst: path.Join(".gc", "scripts"),
+				Probed: true, ContentHash: runtime.HashPathContent(rigScriptsDir),
+			})
+		}
+	}
 	copyFiles = stageHookFiles(copyFiles, p.cityPath, workDir, hookFileProvidersForResolved(resolved, installHooks, p.providers))
 
 	// Step 6: Compute session name.
