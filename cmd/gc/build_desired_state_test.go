@@ -2632,6 +2632,73 @@ func TestBuildDesiredState_InstallsGeminiHooksBeforeFingerprinting(t *testing.T)
 	}
 }
 
+// TestBuildDesiredState_CopiesRigScopedScriptsIntoWorkDir guards ga-c7m Root
+// B: a rig's own gate/check scripts (e.g. ralph.check's gc.check_path
+// resolving a relative ".gc/scripts/checks/<name>.sh") must be staged into
+// every session's work dir for agents scoped to that rig, not only the
+// city-root "scripts" tree. Before this fix, resolveTemplate only ever
+// staged citylayout.ScriptsPath(cityPath) ("<city>/scripts"), so a rig-scoped
+// pool/dispatcher session's ephemeral work dir got a ".gc/" directory with no
+// ".gc/scripts/checks/*" whenever the check script lived under the rig's own
+// "scripts/" tree instead of the city's — causing gate resolution to hard-fail
+// with no diagnostic (silent-park class of failure, worse than a routing
+// stall since it produces no attempt_log/blocked_reason).
+func TestBuildDesiredState_CopiesRigScopedScriptsIntoWorkDir(t *testing.T) {
+	cityPath := t.TempDir()
+	rigPath := filepath.Join(cityPath, "repos", "repo")
+	rigScriptsRoot := filepath.Join(rigPath, "scripts")
+	rigChecksDir := filepath.Join(rigScriptsRoot, "checks")
+	if err := os.MkdirAll(rigChecksDir, 0o755); err != nil {
+		t.Fatalf("mkdir rig checks dir: %v", err)
+	}
+	scriptPath := filepath.Join(rigChecksDir, "build-artifact-valid.sh")
+	if err := os.WriteFile(scriptPath, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("write rig check script: %v", err)
+	}
+
+	cfg := &config.City{
+		Workspace: config.Workspace{Name: "test-city", Provider: "test"},
+		Providers: map[string]config.ProviderSpec{
+			"test": {Command: "echo", PromptMode: "none"},
+		},
+		Rigs: []config.Rig{{Name: "repo", Path: rigPath}},
+		Agents: []config.Agent{{
+			Name:              "worker",
+			Dir:               filepath.Join("repos", "repo"),
+			StartCommand:      "true",
+			MaxActiveSessions: intPtr(1),
+			ScaleCheck:        "echo 1",
+		}},
+	}
+
+	state := buildDesiredState("test-city", cityPath, time.Now().UTC(), cfg, runtime.NewFake(), nil, io.Discard)
+	if len(state.State) != 1 {
+		t.Fatalf("desired state size = %d, want 1", len(state.State))
+	}
+	var tp TemplateParams
+	for _, v := range state.State {
+		tp = v
+	}
+	rc := templateParamsToConfig(tp)
+
+	wantRelDst := path.Join(".gc", "scripts")
+	var matches []runtime.CopyEntry
+	for _, entry := range rc.CopyFiles {
+		if entry.RelDst == wantRelDst {
+			matches = append(matches, entry)
+		}
+	}
+	found := false
+	for _, entry := range matches {
+		if entry.Src == rigScriptsRoot {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("CopyFiles missing rig scripts entry (src=%q, relDst=%q): %#v", rigScriptsRoot, wantRelDst, rc.CopyFiles)
+	}
+}
+
 func TestBuildDesiredState_MaterializesHookOverlaysBeforeFingerprinting(t *testing.T) {
 	cityPath := t.TempDir()
 	packOverlay := filepath.Join(cityPath, "packs", "core", "overlay")

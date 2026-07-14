@@ -4992,6 +4992,119 @@ name = "frontend"
 	}
 }
 
+// TestControlDispatcherSweepStorePaths_BareCityDispatcherSweepsRigStores
+// guards ga-c7m Root A: config.PreferredDeterministicControlDispatcher always
+// prefers the bare city-level control-dispatcher singleton (Dir == "") as the
+// gc.routed_to target for every control bead, including ones stamped with
+// gc.root_store_ref for a rig's own store. Without sweeping those rig stores
+// too, a rig-store control bead sits open forever because the city
+// dispatcher's ready-query only ever polled its own store.
+func TestControlDispatcherSweepStorePaths_BareCityDispatcherSweepsRigStores(t *testing.T) {
+	t.Setenv("GC_BEADS", "bd")
+	cityPath := "/city"
+	cfg := &config.City{
+		Rigs: []config.Rig{
+			{Name: "platform", Path: "/rigs/platform"},
+			{Name: "frontend", Path: "/rigs/frontend"},
+		},
+	}
+	agentCfg := config.Agent{Name: config.ControlDispatcherAgentName}
+
+	got := controlDispatcherSweepStorePaths(agentCfg, cityPath, cityPath, cfg)
+
+	want := []string{cityPath, "/rigs/platform", "/rigs/frontend"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("controlDispatcherSweepStorePaths = %v, want %v", got, want)
+	}
+}
+
+// TestControlDispatcherSweepStorePaths_RigScopedDispatcherStaysSingleStore
+// guards against widening the sweep for a rig-local dispatcher (Dir != ""):
+// its storePath is already scoped to its own rig via agentCommandDir, so it
+// needs no additional sweep dirs.
+func TestControlDispatcherSweepStorePaths_RigScopedDispatcherStaysSingleStore(t *testing.T) {
+	t.Setenv("GC_BEADS", "bd")
+	cfg := &config.City{
+		Rigs: []config.Rig{
+			{Name: "platform", Path: "/rigs/platform"},
+			{Name: "frontend", Path: "/rigs/frontend"},
+		},
+	}
+	agentCfg := config.Agent{Name: config.ControlDispatcherAgentName, Dir: "platform"}
+
+	got := controlDispatcherSweepStorePaths(agentCfg, "/city", "/rigs/platform", cfg)
+
+	want := []string{"/rigs/platform"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("controlDispatcherSweepStorePaths = %v, want %v", got, want)
+	}
+}
+
+// TestControlDispatcherSweepStorePaths_NilConfigOrNonDispatcherStaysSingleStore
+// covers the two remaining early-outs: no config available to enumerate
+// rigs from, and a non-control-dispatcher agent (whose work_query is
+// intentionally scoped to its own directory only).
+func TestControlDispatcherSweepStorePaths_NilConfigOrNonDispatcherStaysSingleStore(t *testing.T) {
+	t.Setenv("GC_BEADS", "bd")
+	cfg := &config.City{Rigs: []config.Rig{{Name: "platform", Path: "/rigs/platform"}}}
+
+	if got := controlDispatcherSweepStorePaths(config.Agent{Name: config.ControlDispatcherAgentName}, "/city", "/city", nil); !slices.Equal(got, []string{"/city"}) {
+		t.Fatalf("nil cfg: controlDispatcherSweepStorePaths = %v, want [/city]", got)
+	}
+	if got := controlDispatcherSweepStorePaths(config.Agent{Name: "worker"}, "/city", "/city", cfg); !slices.Equal(got, []string{"/city"}) {
+		t.Fatalf("non-dispatcher agent: controlDispatcherSweepStorePaths = %v, want [/city]", got)
+	}
+}
+
+// TestDrainWorkflowServeWorkSweepsRigStoreForBareCityDispatcher is an
+// end-to-end guard for ga-c7m Root A on the drain loop itself: a control bead
+// that only shows up in a rig's own store (never the city store) must still
+// be found and processed against that rig's store path, not the city one.
+func TestDrainWorkflowServeWorkSweepsRigStoreForBareCityDispatcher(t *testing.T) {
+	t.Setenv("GC_BEADS", "bd")
+	prevList := workflowServeList
+	prevControl := controlDispatcherServe
+	t.Cleanup(func() {
+		workflowServeList = prevList
+		controlDispatcherServe = prevControl
+	})
+
+	cityPath := "/city"
+	rigPath := "/rigs/platform"
+	cfg := &config.City{Rigs: []config.Rig{{Name: "platform", Path: rigPath}}}
+
+	rigQueryCalls := 0
+	workflowServeList = func(_, dir string, _ map[string]string) ([]hookBead, error) {
+		if dir == rigPath {
+			rigQueryCalls++
+			if rigQueryCalls == 1 {
+				return []hookBead{{ID: "rig-control-bead", Metadata: map[string]string{"gc.kind": "check"}}}, nil
+			}
+		}
+		return nil, nil
+	}
+	var gotStorePaths []string
+	controlDispatcherServe = func(_, storePath string, beadID string, _ io.Writer, _ io.Writer) error {
+		gotStorePaths = append(gotStorePaths, storePath)
+		if beadID != "rig-control-bead" {
+			t.Fatalf("processed unexpected bead %q", beadID)
+		}
+		return nil
+	}
+
+	agentCfg := config.Agent{Name: config.ControlDispatcherAgentName}
+	result, err := drainWorkflowServeWork(agentCfg, cityPath, cityPath, agentCfg.EffectiveWorkQuery(), nil, cfg, io.Discard)
+	if err != nil {
+		t.Fatalf("drainWorkflowServeWork error = %v", err)
+	}
+	if !result.processedAny {
+		t.Fatalf("drainWorkflowServeWork result = %+v, want processedAny", result)
+	}
+	if !slices.Contains(gotStorePaths, rigPath) {
+		t.Fatalf("controlDispatcherServe store paths = %v, want rig store %q included", gotStorePaths, rigPath)
+	}
+}
+
 func TestRunWorkflowServeFollowUsesSweepFallback(t *testing.T) {
 	eventsDir := t.TempDir()
 	ep := newTestProvider(t, eventsDir)
@@ -5036,6 +5149,7 @@ func TestRunWorkflowServeFollowUsesSweepFallback(t *testing.T) {
 		t.TempDir(),
 		t.TempDir(),
 		wfcAgent.EffectiveWorkQuery(),
+		nil,
 		nil,
 		io.Discard,
 	)
@@ -5116,7 +5230,7 @@ func TestRunWorkflowServeFollowResetsBackoffForProcessedEventAndPending(t *testi
 	}
 
 	agent := config.Agent{Name: "control-dispatcher"}
-	err := runWorkflowServeFollow(agent, t.TempDir(), t.TempDir(), agent.EffectiveWorkQuery(), nil, io.Discard)
+	err := runWorkflowServeFollow(agent, t.TempDir(), t.TempDir(), agent.EffectiveWorkQuery(), nil, nil, io.Discard)
 	if !errors.Is(err, stopErr) {
 		t.Fatalf("runWorkflowServeFollow error = %v, want %v", err, stopErr)
 	}
@@ -5206,7 +5320,7 @@ func TestRunWorkflowServeFollowDrainsObservedWakeBeforeSurfacingWatcherErr(t *te
 	}
 
 	agent := config.Agent{Name: "control-dispatcher"}
-	err := runWorkflowServeFollow(agent, t.TempDir(), t.TempDir(), agent.EffectiveWorkQuery(), nil, io.Discard)
+	err := runWorkflowServeFollow(agent, t.TempDir(), t.TempDir(), agent.EffectiveWorkQuery(), nil, nil, io.Discard)
 	if !errors.Is(err, watcherErr) {
 		t.Fatalf("runWorkflowServeFollow error = %v, want %v", err, watcherErr)
 	}
@@ -5257,7 +5371,7 @@ func TestRunWorkflowServeFollowSurvivesTransientWorkQueryTimeout(t *testing.T) {
 	}
 
 	agent := config.Agent{Name: "control-dispatcher"}
-	err := runWorkflowServeFollow(agent, t.TempDir(), t.TempDir(), agent.EffectiveWorkQuery(), nil, io.Discard)
+	err := runWorkflowServeFollow(agent, t.TempDir(), t.TempDir(), agent.EffectiveWorkQuery(), nil, nil, io.Discard)
 	if !errors.Is(err, fatalErr) {
 		t.Fatalf("runWorkflowServeFollow err = %v, want fatal error after surviving the transient timeout", err)
 	}
