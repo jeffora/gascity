@@ -302,7 +302,7 @@ func (c *CachingStore) cachedReadyLocked(query ReadyQuery) ([]Bead, error) {
 		}
 		openBeads = append(openBeads, cloneBead(b))
 	}
-	return cachedReadyRows(nil, query, statusByID, openBeads, c.deps, c.depsComplete)
+	return cachedReadyRows(context.Background(), query, statusByID, openBeads, c.deps, c.depsComplete)
 }
 
 func cachedReadyRows(
@@ -313,10 +313,11 @@ func cachedReadyRows(
 	depsByID map[string][]Dep,
 	depsComplete bool,
 ) ([]Bead, error) {
+	cancellable := ctx != nil && ctx.Done() != nil
 	// Sort candidates before the limit-bounded loop below: the cache source is
 	// a map, so without this a Limit cuts an arbitrary subset. The context-aware
 	// path remains interruptible throughout this CPU work.
-	if ctx == nil {
+	if !cancellable {
 		sortBeadsReadyOrder(openBeads)
 	} else if err := sortBeadsReadyOrderContext(ctx, openBeads); err != nil {
 		return nil, err
@@ -324,7 +325,7 @@ func cachedReadyRows(
 
 	result := make([]Bead, 0, len(openBeads))
 	for _, b := range openBeads {
-		if ctx != nil {
+		if cancellable {
 			if err := ctx.Err(); err != nil {
 				return nil, err
 			}

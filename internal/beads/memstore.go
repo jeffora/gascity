@@ -317,7 +317,7 @@ func (m *MemStore) Ready(query ...ReadyQuery) ([]Bead, error) {
 	q := readyQueryFromArgs(query)
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.readyLocked(nil, q)
+	return m.readyLocked(context.Background(), q)
 }
 
 // ReadyContext implements ContextReadyReader for the in-memory store. Lock
@@ -346,8 +346,9 @@ func (m *MemStore) ReadyContext(ctx context.Context, query ...ReadyQuery) ([]Bea
 }
 
 func (m *MemStore) readyLocked(ctx context.Context, q ReadyQuery) ([]Bead, error) {
+	cancellable := ctx != nil && ctx.Done() != nil
 	contextErr := func() error {
-		if ctx == nil {
+		if !cancellable {
 			return nil
 		}
 		return ctx.Err()

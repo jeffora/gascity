@@ -317,7 +317,7 @@ func sortBeadsReadyOrder(items []Bead) {
 // checks inside both comparison and copy work instead of abandoning an
 // uninterruptible sort goroutine when ctx expires.
 func sortBeadsReadyOrderContext(ctx context.Context, items []Bead) error {
-	if ctx == nil {
+	if ctx == nil || ctx.Done() == nil {
 		sortBeadsReadyOrder(items)
 		return nil
 	}
