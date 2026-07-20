@@ -502,6 +502,25 @@ func controlDispatcherSweepStorePaths(agentCfg config.Agent, cityPath, storePath
 	return dirs
 }
 
+// rigPathForSweepDir finds the configured rig whose resolved store scope
+// root matches dir, returning that rig's configured (unresolved) Path so
+// callers can feed it to bdRuntimeEnvForRigWithError. Returns "" if dir does
+// not correspond to any configured rig (e.g. it is the primary city store).
+func rigPathForSweepDir(cfg *config.City, cityPath, dir string) string {
+	if cfg == nil {
+		return ""
+	}
+	for _, rig := range cfg.Rigs {
+		if strings.TrimSpace(rig.Path) == "" {
+			continue
+		}
+		if resolveStoreScopeRoot(cityPath, rig.Path) == dir {
+			return rig.Path
+		}
+	}
+	return ""
+}
+
 // drainWorkflowServeWork runs the control-dispatcher drain loop to completion
 // for a single invocation. Returns whether it advanced a control bead and
 // whether the queue still contains only pending work so the --follow caller
@@ -514,7 +533,23 @@ func drainWorkflowServeWork(agentCfg config.Agent, cityPath, storePath, workQuer
 		serveQuery := workflowServeWorkQuery(agentCfg, workQuery)
 		var queue []workflowServeCandidate
 		for _, dir := range sweepDirs {
-			dirQueue, err := workflowServeList(serveQuery, dir, workEnv)
+			dirEnv := workEnv
+			if dir != storePath {
+				// Secondary sweep dirs are rig stores added by
+				// controlDispatcherSweepStorePaths: the single city-scoped
+				// workEnv pins BEADS_DIR at the city store, so every rig-store
+				// query would otherwise silently re-read the city store and
+				// find nothing (gascity ga-voa/ga-pwr).
+				if rigPath := rigPathForSweepDir(cfg, cityPath, dir); rigPath != "" {
+					rigEnv, err := bdRuntimeEnvForRigWithError(cityPath, cfg, rigPath)
+					if err != nil {
+						workflowTracef("serve sweep-env-error agent=%s dir=%s err=%v", agentCfg.QualifiedName(), dir, err)
+						continue
+					}
+					dirEnv = rigEnv
+				}
+			}
+			dirQueue, err := workflowServeList(serveQuery, dir, dirEnv)
 			if err != nil {
 				workflowTracef("serve query-error agent=%s dir=%s err=%v", agentCfg.QualifiedName(), dir, err)
 				if dir == storePath {

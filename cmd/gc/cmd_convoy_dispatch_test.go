@@ -5072,9 +5072,13 @@ func TestDrainWorkflowServeWorkSweepsRigStoreForBareCityDispatcher(t *testing.T)
 	cityPath := "/city"
 	rigPath := "/rigs/platform"
 	cfg := &config.City{Rigs: []config.Rig{{Name: "platform", Path: rigPath}}}
+	cityBeadsDir := filepath.Join(cityPath, ".beads")
+	rigBeadsDir := filepath.Join(rigPath, ".beads")
 
 	rigQueryCalls := 0
-	workflowServeList = func(_, dir string, _ map[string]string) ([]hookBead, error) {
+	envByDir := map[string]map[string]string{}
+	workflowServeList = func(_, dir string, env map[string]string) ([]hookBead, error) {
+		envByDir[dir] = env
 		if dir == rigPath {
 			rigQueryCalls++
 			if rigQueryCalls == 1 {
@@ -5093,7 +5097,8 @@ func TestDrainWorkflowServeWorkSweepsRigStoreForBareCityDispatcher(t *testing.T)
 	}
 
 	agentCfg := config.Agent{Name: config.ControlDispatcherAgentName}
-	result, err := drainWorkflowServeWork(agentCfg, cityPath, cityPath, agentCfg.EffectiveWorkQuery(), nil, cfg, io.Discard)
+	cityWorkEnv := map[string]string{"BEADS_DIR": cityBeadsDir}
+	result, err := drainWorkflowServeWork(agentCfg, cityPath, cityPath, agentCfg.EffectiveWorkQuery(), cityWorkEnv, cfg, io.Discard)
 	if err != nil {
 		t.Fatalf("drainWorkflowServeWork error = %v", err)
 	}
@@ -5102,6 +5107,22 @@ func TestDrainWorkflowServeWorkSweepsRigStoreForBareCityDispatcher(t *testing.T)
 	}
 	if !slices.Contains(gotStorePaths, rigPath) {
 		t.Fatalf("controlDispatcherServe store paths = %v, want rig store %q included", gotStorePaths, rigPath)
+	}
+
+	// The symmetric case for ga-voa/ga-pwr's actual root cause: querying the
+	// rig sweep dir must use an env whose BEADS_DIR points at that rig's own
+	// .beads, not the city's single workEnv reused across every dir (which
+	// made the gc-beads-bd provider, which selects its store from BEADS_DIR
+	// rather than cwd, silently re-read the city store for the rig dir too).
+	rigEnv, ok := envByDir[rigPath]
+	if !ok {
+		t.Fatalf("rig store dir %q was never queried; queried dirs = %v", rigPath, envByDir)
+	}
+	if got := rigEnv["BEADS_DIR"]; got != rigBeadsDir {
+		t.Fatalf("rig sweep dir env BEADS_DIR = %q, want %q (old behavior reused the city env %q)", got, rigBeadsDir, cityBeadsDir)
+	}
+	if got := envByDir[cityPath]["BEADS_DIR"]; got != cityBeadsDir {
+		t.Fatalf("primary city sweep dir env BEADS_DIR = %q, want unchanged %q", got, cityBeadsDir)
 	}
 }
 
