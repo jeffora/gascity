@@ -1,6 +1,10 @@
 package sessionlog
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/gastownhall/gascity/internal/modelwindow"
+)
 
 // TestOpus5IsNativelyOneMillion pins the regression behind ra-jbbv0.
 //
@@ -21,8 +25,8 @@ func TestOpus5IsNativelyOneMillion(t *testing.T) {
 		"opus-5",
 		"claude-opus-5[1m]", // suffix is redundant for Opus 5, must not regress
 	} {
-		if got := ModelContextWindow(id); got != millionTokenWindow {
-			t.Errorf("ModelContextWindow(%q) = %d, want %d (Opus 5 is natively 1M)", id, got, millionTokenWindow)
+		if got := ModelContextWindow(id); got != modelwindow.Million {
+			t.Errorf("ModelContextWindow(%q) = %d, want %d (Opus 5 is natively 1M)", id, got, modelwindow.Million)
 		}
 	}
 }
@@ -32,13 +36,26 @@ func TestOpus5IsNativelyOneMillion(t *testing.T) {
 // must leave every existing family/suffix resolution exactly as it was.
 func TestPreExistingWindowsUnchanged(t *testing.T) {
 	cases := map[string]int{
-		"claude-opus-4-8":               200_000,
-		"claude-opus-4-7":               200_000,
-		"claude-opus-4-8[1m]":           millionTokenWindow,
-		"claude-sonnet-5":               200_000, // pre-existing drift; out of this bead's scope (tracked upstream by #4527)
-		"claude-sonnet-4-6":             200_000,
+		// opus-4-6/4-7/4-8 and sonnet-4-6 moved 200K -> 1M here when ga-b9m
+		// single-sourced the window table. These values were NOT changed by
+		// that commit in any user-visible resolver: the CLI injector has
+		// treated all four as 1M since #3371 (context_inject.go:157 on
+		// 1c2614b43). Only this session-log path disagreed, which is the
+		// inconsistency #4527 exists to remove. INHERITED AND UNVERIFIED BY US
+		// — we have never independently confirmed these four against
+		// subscription behaviour, and the /v1/models oracle upstream cites is
+		// not valid for that. Treat as status quo, not as endorsement.
+		"claude-opus-4-8":     modelwindow.Million,
+		"claude-opus-4-7":     modelwindow.Million,
+		"claude-opus-4-8[1m]": modelwindow.Million,
+		"claude-sonnet-4-6":   modelwindow.Million,
+		// sonnet-5 is the one entry we DID change: #4527 shipped it as 1M and
+		// ga-b9m removed it. Both resolvers said 200K before this commit, so
+		// keeping it at 200K preserves the status quo rather than altering it.
+		"claude-sonnet-5":               200_000,
+		"claude-sonnet-5[1m]":           modelwindow.Million,
 		"claude-haiku-4-5-20251001":     200_000,
-		"claude-haiku-4-5-20251001[1m]": millionTokenWindow,
+		"claude-haiku-4-5-20251001[1m]": modelwindow.Million,
 		"gemini-2.5-pro":                1_000_000,
 		"gpt-4o-2024-08-06":             128_000,
 		"gpt-5-20260101":                258_000,
