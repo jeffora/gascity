@@ -414,7 +414,7 @@ func processTreeAlive(shellPID int, fg []proc, processNames []string, sessionID 
 
 // ObserveLiveness reports session presence (Running) and agent-process
 // liveness (Alive) in one `agent get` pass, derived from herdr's own agent
-// registry and status — the herdr analogue of the tmux provider's
+// registry and status — the herdr analog of the tmux provider's
 // ObserveLiveness. This is the LivenessObserver fast-path that
 // runtime.ObserveLiveness prefers over the generic IsRunning + ProcessAlive
 // fold, so it is what every liveness consumer (the API observer, the session
