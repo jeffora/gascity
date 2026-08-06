@@ -168,6 +168,78 @@ func TestConditionEnvEnvironUsesStorePathForBeadsDir(t *testing.T) {
 	}
 }
 
+// A rig-scoped gate must carry the rig identity, not just the store path.
+// BEADS_DIR alone does not retarget `gc bd`: its store resolution is
+// --rig > bead-prefix > GC_RIG > cwd > city, so without GC_RIG the lookup
+// exhausts that chain and answers from the CITY store, where a rig bead does
+// not exist. cwd cannot rescue it because a gate runs in the ephemeral
+// per-step worktree. That made every rig ralph gate fail deterministically on
+// an unresolvable bead (un-1b63). GC_RIG is the load-bearing variable —
+// verified by bisection — with GC_RIG_ROOT/GC_BEADS_SCOPE_ROOT set alongside
+// it so the gate env matches the rig-agent contract in template_resolve.go.
+func TestConditionEnvEnvironCarriesRigScopeWhenRigNamed(t *testing.T) {
+	env := ConditionEnv{
+		BeadID:    "bead-rig",
+		Iteration: 1,
+		CityPath:  "/city",
+		StorePath: "/city/rigs/alpha",
+		RigName:   "alpha",
+	}
+
+	lookup := environLookup(t, env)
+
+	if got := lookup["GC_RIG"]; got != "alpha" {
+		t.Errorf("GC_RIG = %q, want %q — without it gc bd answers from the city store", got, "alpha")
+	}
+	if got := lookup["GC_RIG_ROOT"]; got != "/city/rigs/alpha" {
+		t.Errorf("GC_RIG_ROOT = %q, want the rig root", got)
+	}
+	if got := lookup["GC_BEADS_SCOPE_ROOT"]; got != "/city/rigs/alpha" {
+		t.Errorf("GC_BEADS_SCOPE_ROOT = %q, want the rig root", got)
+	}
+	if got := lookup["BEADS_DIR"]; got != filepath.Join("/city/rigs/alpha", ".beads") {
+		t.Errorf("BEADS_DIR = %q, want the rig beads dir", got)
+	}
+}
+
+// A city-scoped gate must NOT claim a rig. Stamping a rig identity that does
+// not match the store would be worse than omitting it: GC_RIG is consulted
+// before cwd, so a wrong value actively retargets the lookup at the wrong rig.
+func TestConditionEnvEnvironOmitsRigScopeForCityGate(t *testing.T) {
+	env := ConditionEnv{
+		BeadID:    "bead-city",
+		Iteration: 1,
+		CityPath:  "/city",
+		StorePath: "/city",
+	}
+
+	lookup := environLookup(t, env)
+
+	if got, ok := lookup["GC_RIG"]; ok && got != "" {
+		t.Errorf("GC_RIG = %q, want unset for a city-scoped gate", got)
+	}
+	if got, ok := lookup["GC_RIG_ROOT"]; ok && got != "" {
+		t.Errorf("GC_RIG_ROOT = %q, want unset for a city-scoped gate", got)
+	}
+	// The scope root is still declared so the beads provider resolves the
+	// city store explicitly rather than by omission.
+	if got := lookup["GC_BEADS_SCOPE_ROOT"]; got != "/city" {
+		t.Errorf("GC_BEADS_SCOPE_ROOT = %q, want the city path", got)
+	}
+}
+
+func environLookup(t *testing.T, env ConditionEnv) map[string]string {
+	t.Helper()
+	lookup := make(map[string]string)
+	for _, v := range env.Environ() {
+		parts := strings.SplitN(v, "=", 2)
+		if len(parts) == 2 {
+			lookup[parts[0]] = parts[1]
+		}
+	}
+	return lookup
+}
+
 func TestConditionEnvEnvironPreservesDoltConnection(t *testing.T) {
 	t.Setenv("BEADS_DOLT_SERVER_PORT", "33061")
 	t.Setenv("GC_DOLT_HOST", "127.0.0.1")

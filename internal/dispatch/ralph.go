@@ -232,8 +232,14 @@ func runRalphCheck(store beads.Store, bead, subject beads.Bead, attempt int, opt
 		return convergence.GateResult{}, fmt.Errorf("%s: missing city path for exec check", bead.ID)
 	}
 	storePath := opts.StorePath
+	rigName := opts.RigName
 	if storePath == "" {
 		storePath = cityPath
+		// Falling back to the city store invalidates any configured rig name:
+		// it no longer describes the store this gate reads, and a rig name
+		// that disagrees with the store is worse than none, because `gc bd`
+		// consults GC_RIG ahead of cwd and would retarget the wrong rig.
+		rigName = ""
 	}
 
 	workDir := resolveInheritedMetadata(store, bead, beadmeta.LegacyWorkDirMetadataKey, beadmeta.WorkDirMetadataKey)
@@ -347,6 +353,7 @@ func runRalphCheck(store beads.Store, bead, subject beads.Bead, attempt int, opt
 		Iteration:   attempt,
 		CityPath:    cityPath,
 		StorePath:   storePath,
+		RigName:     rigName,
 		WorkDir:     resolvedWorkDir,
 		MoleculeDir: moleculeDir,
 		ArtifactDir: artifactDir,

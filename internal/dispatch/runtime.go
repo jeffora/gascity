@@ -37,9 +37,15 @@ type SourceWorkflowStore struct {
 // ProcessOptions provides control-dispatcher execution context.
 type ProcessOptions struct {
 	// Context optionally cancels bounded retry waits inside ProcessControl.
-	Context            context.Context
-	CityPath           string
-	StorePath          string
+	Context   context.Context
+	CityPath  string
+	StorePath string
+	// RigName is the configured name of the rig owning StorePath, empty when
+	// StorePath is the city store. Gate subprocesses need the rig identity
+	// (not just the path) for their nested `gc bd` to resolve this store; see
+	// convergence.ConditionEnv.RigName. Must name StorePath's rig or stay
+	// empty — a mismatch redirects gate lookups at the wrong store.
+	RigName            string
 	FormulaSearchPaths []string
 	PrepareFragment    func(*formula.FragmentRecipe, beads.Bead) error
 	PrepareRecipe      func(*formula.Recipe, beads.Bead) error

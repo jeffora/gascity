@@ -55,11 +55,18 @@ func conditionPATH() string {
 // ConditionEnv builds the environment variables for a gate condition script.
 // All bead-derived values are passed as env vars — never interpolated into commands.
 type ConditionEnv struct {
-	BeadID               string
-	Iteration            int
-	CityPath             string
-	StorePath            string
-	WorkDir              string
+	BeadID    string
+	Iteration int
+	CityPath  string
+	StorePath string
+	// RigName is the configured name of the rig owning StorePath, empty for a
+	// city-scoped gate. It is the rig IDENTITY, not a path: `gc bd` resolves
+	// its store via --rig > bead-prefix > GC_RIG > cwd > city, so the name is
+	// what retargets a lookup. Callers must only set it when it genuinely
+	// names StorePath's rig — a mismatched value silently redirects gate
+	// lookups at the wrong store.
+	RigName   string
+	WorkDir   string
 	WispID               string
 	DocPath              string // from var.doc_path, may be empty
 	MoleculeDir          string // molecule.Dir(CityPath, rootID); may be empty for non-molecule beads
@@ -100,6 +107,28 @@ func (ce ConditionEnv) Environ() []string {
 		"GC_MAX_ITERATIONS=" + strconv.Itoa(ce.MaxIterations),
 	}
 	env = append(env, citylayout.CityRuntimeEnvForRuntimeDir(ce.CityPath, citylayout.TrustedAmbientCityRuntimeDir(ce.CityPath))...)
+
+	// Declare the store scope the same way a rig agent's env does
+	// (cmd/gc/template_resolve.go), so a gate script's nested `gc` resolves the
+	// store this gate is actually running against.
+	//
+	// BEADS_DIR above is necessary but NOT sufficient: `gc bd` picks its store
+	// from --rig > bead-prefix > GC_RIG > cwd > city, and consults BEADS_DIR
+	// only after that choice. Without GC_RIG a rig-scoped gate exhausted the
+	// chain — cwd is the ephemeral per-step worktree, not the rig root — and
+	// answered from the CITY store, so every rig ralph gate failed
+	// deterministically on a bead that plainly existed (un-1b63). Bisection
+	// confirmed GC_RIG is the load-bearing variable; GC_RIG_ROOT and
+	// GC_BEADS_SCOPE_ROOT are set with it to match the rig-agent contract
+	// rather than leaving a half-populated scope for other consumers.
+	//
+	// The allowlist is deliberate — gate scripts get a constructed env, never
+	// the controller's (HOME is repointed above to keep them away from
+	// .ssh/.gnupg). These are three named additions, not inheritance.
+	env = append(env, "GC_BEADS_SCOPE_ROOT="+storePath)
+	if rigName := strings.TrimSpace(ce.RigName); rigName != "" {
+		env = append(env, "GC_RIG="+rigName, "GC_RIG_ROOT="+storePath)
+	}
 
 	// Optional fields: only include if non-empty.
 	if ce.DocPath != "" {

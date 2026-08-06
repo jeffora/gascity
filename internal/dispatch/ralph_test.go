@@ -157,6 +157,98 @@ func TestResolveRalphCheckMoleculePaths_UnsafeRootID(t *testing.T) {
 // tree, the relative join <work_dir>/assets/... does not exist and the check
 // was control-quarantined. The fallback resolves the relative path against the
 // store root instead, so the gate is evaluated.
+// A rig-scoped gate script must receive the rig identity, not just the store
+// path. Its nested `gc bd` resolves the store via
+// --rig > bead-prefix > GC_RIG > cwd > city, so without GC_RIG the lookup
+// reaches the CITY store, where the rig's own bead does not exist — the
+// deterministic 3/3 rig gate failure in un-1b63. The script asserts the env it
+// actually got, so this fails if the plumbing regresses anywhere between
+// ProcessOptions and the subprocess.
+func TestRunRalphCheckGivesGateScriptTheRigScope(t *testing.T) {
+	cityPath := t.TempDir()
+	rigRoot := filepath.Join(cityPath, "rigs", "alpha")
+	if err := os.MkdirAll(rigRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	script := filepath.Join(rigRoot, "check.sh")
+	assertEnv := "#!/bin/sh\n" +
+		"[ \"$GC_RIG\" = alpha ] || { echo \"GC_RIG=$GC_RIG want alpha\" >&2; exit 1; }\n" +
+		"[ \"$GC_RIG_ROOT\" = \"" + rigRoot + "\" ] || { echo \"GC_RIG_ROOT=$GC_RIG_ROOT\" >&2; exit 1; }\n" +
+		"[ \"$GC_BEADS_SCOPE_ROOT\" = \"" + rigRoot + "\" ] || { echo \"GC_BEADS_SCOPE_ROOT=$GC_BEADS_SCOPE_ROOT\" >&2; exit 1; }\n" +
+		"exit 0\n"
+	if err := os.WriteFile(script, []byte(assertEnv), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	store := beads.NewMemStore()
+	root := mustCreate(t, store, beads.Bead{Title: "workflow", Metadata: map[string]string{"gc.kind": "workflow"}})
+	control := mustCreate(t, store, beads.Bead{
+		Title: "rig gate",
+		Metadata: map[string]string{
+			"gc.kind":         "ralph",
+			"gc.root_bead_id": root.ID,
+			"gc.check_path":   "check.sh",
+			"gc.max_attempts": "3",
+		},
+	})
+	subject := mustCreate(t, store, beads.Bead{
+		Title:    "rig gate iteration 1",
+		Metadata: map[string]string{"gc.kind": "scope", "gc.root_bead_id": root.ID},
+	})
+
+	result, err := runRalphCheck(store, control, subject, 1, ProcessOptions{
+		CityPath: cityPath, StorePath: rigRoot, RigName: "alpha",
+	})
+	if err != nil {
+		t.Fatalf("runRalphCheck: %v", err)
+	}
+	if result.Outcome != convergence.GatePass {
+		t.Fatalf("Outcome = %q, want pass; gate script rejected its env: %s", result.Outcome, result.Stderr)
+	}
+}
+
+// The city-store fallback must drop any configured rig name: once storePath
+// defaults to cityPath the name no longer describes the store being read, and
+// GC_RIG outranks cwd, so a stale value would retarget the wrong rig.
+func TestRunRalphCheckDropsRigNameWhenFallingBackToCityStore(t *testing.T) {
+	cityPath := t.TempDir()
+	script := filepath.Join(cityPath, "check.sh")
+	body := "#!/bin/sh\n" +
+		"[ -z \"$GC_RIG\" ] || { echo \"GC_RIG=$GC_RIG want empty\" >&2; exit 1; }\n" +
+		"[ -z \"$GC_RIG_ROOT\" ] || { echo \"GC_RIG_ROOT=$GC_RIG_ROOT want empty\" >&2; exit 1; }\n" +
+		"exit 0\n"
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	store := beads.NewMemStore()
+	root := mustCreate(t, store, beads.Bead{Title: "workflow", Metadata: map[string]string{"gc.kind": "workflow"}})
+	control := mustCreate(t, store, beads.Bead{
+		Title: "city gate",
+		Metadata: map[string]string{
+			"gc.kind":         "ralph",
+			"gc.root_bead_id": root.ID,
+			"gc.check_path":   "check.sh",
+			"gc.max_attempts": "3",
+		},
+	})
+	subject := mustCreate(t, store, beads.Bead{
+		Title:    "city gate iteration 1",
+		Metadata: map[string]string{"gc.kind": "scope", "gc.root_bead_id": root.ID},
+	})
+
+	// StorePath empty forces the cityPath fallback while RigName is still set.
+	result, err := runRalphCheck(store, control, subject, 1, ProcessOptions{
+		CityPath: cityPath, RigName: "alpha",
+	})
+	if err != nil {
+		t.Fatalf("runRalphCheck: %v", err)
+	}
+	if result.Outcome != convergence.GatePass {
+		t.Fatalf("Outcome = %q, want pass; stale rig name leaked into a city gate: %s", result.Outcome, result.Stderr)
+	}
+}
+
 func TestRunRalphCheckPackRelativeCheckPathWorkDirFallback(t *testing.T) {
 	cityPath := t.TempDir()
 	// Pack-shipped check script lives under the city/store root.

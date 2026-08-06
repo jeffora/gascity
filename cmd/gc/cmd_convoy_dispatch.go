@@ -188,6 +188,17 @@ func runControlDispatcherWithStoreAndConfig(cityPath, storePath string, store be
 	}
 
 	opts := dispatch.ProcessOptions{CityPath: cityPath, StorePath: storePath}
+	// Gate subprocesses resolve their bead store by rig NAME, not by path (see
+	// dispatch.ProcessOptions.RigName): a rig gate whose env lacks GC_RIG falls
+	// through to the city store and cannot see its own bead (un-1b63). Derive
+	// the name from the store this dispatcher serves. Left empty for a city
+	// store and on any resolution failure — a wrong rig name is worse than
+	// none, because it would redirect gate lookups at another rig's store.
+	if cfg != nil && strings.TrimSpace(storePath) != "" {
+		if rig, ok, rigErr := resolveRigForDir(cfg, cityPath, storePath); rigErr == nil && ok {
+			opts.RigName = rig.Name
+		}
+	}
 	opts.Tracef = workflowTracef
 	loadCfg := false
 	// This is a per-kind capability switch (does this control kind need city
