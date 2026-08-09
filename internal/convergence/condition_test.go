@@ -228,6 +228,35 @@ func TestConditionEnvEnvironOmitsRigScopeForCityGate(t *testing.T) {
 	}
 }
 
+// HOME is deliberately repointed at the city to sandbox gate scripts away from
+// the controller's ~/.ssh and ~/.gnupg. But gc's pack cache lives under
+// GC_HOME, which resolves to <HOME>/.gc when GC_HOME is unset — so the sandbox
+// silently redirected every nested `gc` at <city>/.gc/cache/repos, which holds
+// only the builtin pack. Every remote city import then reported "locked but not
+// cached" and `gc bd` died in loadCityConfig BEFORE it ever reached store
+// selection, failing every rig ralph gate fleet-wide (un-1b63). Passing GC_HOME
+// explicitly keeps the HOME sandbox intact and the cache findable.
+func TestConditionEnvEnvironCarriesGCHomeSoPackCacheSurvivesHomeSandbox(t *testing.T) {
+	t.Setenv("GC_HOME", "/real/home/.gc")
+
+	env := ConditionEnv{
+		BeadID:    "bead-home",
+		Iteration: 1,
+		CityPath:  "/city",
+		StorePath: "/city/rigs/alpha",
+		RigName:   "alpha",
+	}
+
+	lookup := environLookup(t, env)
+
+	if got := lookup["HOME"]; got != "/city" {
+		t.Errorf("HOME = %q, want the city path — the .ssh/.gnupg sandbox must stay intact", got)
+	}
+	if got := lookup["GC_HOME"]; got != "/real/home/.gc" {
+		t.Errorf("GC_HOME = %q, want the controller's resolved gc home — without it the nested gc resolves its pack cache under the sandboxed HOME and config load fails", got)
+	}
+}
+
 func environLookup(t *testing.T, env ConditionEnv) map[string]string {
 	t.Helper()
 	lookup := make(map[string]string)

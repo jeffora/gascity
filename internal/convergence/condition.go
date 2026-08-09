@@ -13,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/gastownhall/gascity/internal/citylayout"
+	"github.com/gastownhall/gascity/internal/gchome"
 	"github.com/gastownhall/gascity/internal/pathutil"
 )
 
@@ -65,8 +66,8 @@ type ConditionEnv struct {
 	// what retargets a lookup. Callers must only set it when it genuinely
 	// names StorePath's rig — a mismatched value silently redirects gate
 	// lookups at the wrong store.
-	RigName   string
-	WorkDir   string
+	RigName              string
+	WorkDir              string
 	WispID               string
 	DocPath              string // from var.doc_path, may be empty
 	MoleculeDir          string // molecule.Dir(CityPath, rootID); may be empty for non-molecule beads
@@ -107,6 +108,24 @@ func (ce ConditionEnv) Environ() []string {
 		"GC_MAX_ITERATIONS=" + strconv.Itoa(ce.MaxIterations),
 	}
 	env = append(env, citylayout.CityRuntimeEnvForRuntimeDir(ce.CityPath, citylayout.TrustedAmbientCityRuntimeDir(ce.CityPath))...)
+
+	// gc's pack cache lives under GC_HOME, which resolves to <HOME>/.gc when
+	// GC_HOME is unset. Because HOME above is repointed at the city to sandbox
+	// gate scripts, a nested `gc` would otherwise resolve its cache to
+	// <city>/.gc/cache/repos — which holds only the builtin pack. Every remote
+	// city import then reports "locked but not cached" and `gc bd` fails in
+	// loadCityConfig BEFORE reaching store selection, so every rig ralph gate
+	// failed deterministically on a bead that plainly existed (un-1b63). The
+	// two intentions collide: sandbox HOME, and let nested gc find its own
+	// cache. Passing the controller's resolved GC_HOME satisfies both — the
+	// sandbox stays, and the cache is named independently of HOME.
+	//
+	// An unstable last-resort resolution is skipped rather than exported: a
+	// PID-stamped temp path names a cache that does not exist, which would
+	// trade this failure for a less legible one.
+	if home := gchome.ResolveReadOnly(); home.Provenance() != gchome.ProvenanceLastResort {
+		env = append(env, "GC_HOME="+home.Path())
+	}
 
 	// Declare the store scope the same way a rig agent's env does
 	// (cmd/gc/template_resolve.go), so a gate script's nested `gc` resolves the
